@@ -1,6 +1,9 @@
 import './App.css'
 import { preparationStages } from './app/preparationStages'
 import { accessRoles } from './domain/access'
+import { validateCourse } from './domain/catalog'
+import { validatePreferenceSubmission } from './domain/preferences'
+import { demoClusters, demoCourses, demoCycle, demoSubmission } from './demo/demoCycle'
 
 const readinessCards = [
   { label: 'מעטפת המוצר', value: 'מוכנה לפיתוח', detail: 'יישום עצמאי, עברית ו־RTL, ללא תלות בממשק EdTrack.', tone: 'ready' },
@@ -21,6 +24,11 @@ function RouteMark() {
 }
 
 function App() {
+  const demoIssues = [
+    ...demoCourses.flatMap(validateCourse),
+    ...validatePreferenceSubmission(demoSubmission, demoCycle),
+  ]
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -57,6 +65,20 @@ function App() {
               </article>
             ))}
           </div>
+        </section>
+
+        <section className="domain-summary" aria-labelledby="domain-title">
+          <div>
+            <span className="eyebrow">מודל תחום פעיל</span>
+            <h2 id="domain-title">מחזור הדגמה: {demoCycle.schoolYear} · {demoCycle.termLabel}</h2>
+            <p>הנתונים מקומיים ואנונימיים. הם משמשים לבדיקת כללי המחזור והטופס בלבד.</p>
+          </div>
+          <dl>
+            <div><dt>מצב</dt><dd>בחירה פתוחה</dd></div>
+            <div><dt>מקבצים</dt><dd>{demoClusters.length}</dd></div>
+            <div><dt>קורסים</dt><dd>{demoCourses.length}</dd></div>
+            <div><dt>בדיקות תקינות</dt><dd className={demoIssues.length ? 'has-issues' : 'is-valid'}>{demoIssues.length ? `${demoIssues.length} לבדיקה` : 'תקין'}</dd></div>
+          </dl>
         </section>
 
         <section className="split-layout">
