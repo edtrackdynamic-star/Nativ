@@ -1,0 +1,9 @@
+packages:
+  - functions
+
+onlyBuiltDependencies:
+  - '@firebase/util'
+  - protobufjs
+allowBuilds:
+  '@firebase/util': true
+  protobufjs: true
