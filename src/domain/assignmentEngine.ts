@@ -1,0 +1,122 @@
+import type { Course } from './catalog'
+import type { ClusterPreference } from './preferences'
+
+export type AiPriority = 'high' | 'medium' | 'neutral'
+
+export interface AssignmentStudent {
+  studentId: string
+  displayLabel: string
+  submission?: { preferences: ClusterPreference[] }
+  approvedAiByCluster?: Record<string, AiPriority>
+  previouslyCompletedLogicalCourseIds?: string[]
+}
+
+export interface HardConstraint {
+  studentId: string
+  clusterId: string
+  type: 'must_assign' | 'must_not_assign'
+  courseId: string
+  note: string
+}
+
+export interface AssignmentResult {
+  studentId: string
+  clusterId: string
+  courseId: string
+  rank: number | null
+  source: 'hard_constraint' | 'ranked_choice' | 'fallback_submitter' | 'fallback_non_submitter'
+  aiPriority: AiPriority
+  explanation: string
+}
+
+export interface AssignmentRunResult {
+  assignments: AssignmentResult[]
+  enrollmentByCourse: Record<string, number>
+  warnings: string[]
+  tieBreaks: string[]
+}
+
+const priorityValue: Record<AiPriority, number> = { high: 3, medium: 2, neutral: 1 }
+
+function deterministicKey(value: string): string {
+  let hash = 2166136261
+  for (const character of `42|${value}`) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function isRepeatAllowed(course: Course, student: AssignmentStudent): boolean {
+  const repeated = student.previouslyCompletedLogicalCourseIds?.includes(course.logicalCourseId) ?? false
+  return !repeated || course.repeatPolicy !== 'prohibited'
+}
+
+export function runDeterministicAssignment(input: {
+  cycleId: string
+  clusterIds: string[]
+  courses: Course[]
+  students: AssignmentStudent[]
+  constraints?: HardConstraint[]
+}): AssignmentRunResult {
+  const assignments: AssignmentResult[] = []
+  const warnings: string[] = []
+  const tieBreaks: string[] = []
+  const enrollmentByCourse: Record<string, number> = Object.fromEntries(input.courses.map((course) => [course.id, 0]))
+
+  for (const clusterId of input.clusterIds) {
+    const courses = input.courses.filter((course) => course.clusterId === clusterId && course.published)
+    const assigned = new Set<string>()
+    const constraints = input.constraints?.filter((constraint) => constraint.clusterId === clusterId) ?? []
+    const allowed = (student: AssignmentStudent, course: Course) => isRepeatAllowed(course, student) && !constraints.some((constraint) => constraint.studentId === student.studentId && constraint.courseId === course.id && constraint.type === 'must_not_assign')
+    const add = (student: AssignmentStudent, course: Course, rank: number | null, source: AssignmentResult['source'], explanation: string) => {
+      assignments.push({ studentId: student.studentId, clusterId, courseId: course.id, rank, source, aiPriority: student.approvedAiByCluster?.[clusterId] ?? 'neutral', explanation })
+      enrollmentByCourse[course.id] += 1
+      assigned.add(student.studentId)
+    }
+
+    const forced = constraints.filter((constraint) => constraint.type === 'must_assign').sort((left, right) => deterministicKey(`${clusterId}|forced|${left.studentId}`).localeCompare(deterministicKey(`${clusterId}|forced|${right.studentId}`)))
+    for (const constraint of forced) {
+      const student = input.students.find((entry) => entry.studentId === constraint.studentId)
+      const course = courses.find((entry) => entry.id === constraint.courseId)
+      if (!student || !course || !allowed(student, course) || enrollmentByCourse[course.id] >= course.capacity.maximum) throw new Error(`אילוץ חובה אינו ניתן לביצוע: ${constraint.studentId} / ${constraint.courseId}`)
+      if (!assigned.has(student.studentId)) add(student, course, null, 'hard_constraint', `אילוץ קשיח: ${constraint.note}`)
+    }
+
+    const submitters = input.students.filter((student) => student.submission?.preferences.some((preference) => preference.clusterId === clusterId))
+    const maxRank = Math.max(0, ...submitters.flatMap((student) => student.submission?.preferences.find((preference) => preference.clusterId === clusterId)?.rankings.map((ranking) => ranking.rank) ?? []))
+    for (const phase of ['target', 'maximum'] as const) {
+      for (let rank = 1; rank <= maxRank; rank += 1) {
+        for (const course of courses) {
+          const limit = phase === 'target' ? course.capacity.target : course.capacity.maximum
+          const available = limit - enrollmentByCourse[course.id]
+          if (available <= 0) continue
+          const candidates = submitters.filter((student) => !assigned.has(student.studentId) && allowed(student, course) && student.submission?.preferences.find((preference) => preference.clusterId === clusterId)?.rankings.some((ranking) => ranking.rank === rank && ranking.courseId === course.id)).sort((left, right) => {
+            const priorityDifference = priorityValue[right.approvedAiByCluster?.[clusterId] ?? 'neutral'] - priorityValue[left.approvedAiByCluster?.[clusterId] ?? 'neutral']
+            return priorityDifference || deterministicKey(`${clusterId}|${course.id}|${rank}|${phase}|${left.studentId}`).localeCompare(deterministicKey(`${clusterId}|${course.id}|${rank}|${phase}|${right.studentId}`))
+          })
+          candidates.slice(0, available).forEach((student) => add(student, course, rank, 'ranked_choice', `בחירה בדירוג ${rank}; שלב ${phase === 'target' ? 'יעד' : 'מקסימום'}`))
+          if (candidates.length > available) tieBreaks.push(`${clusterId}|${course.id}|${rank}|${phase}`)
+        }
+      }
+    }
+
+    const chooseFallback = (student: AssignmentStudent, label: string) => courses.filter((course) => enrollmentByCourse[course.id] < course.capacity.maximum && allowed(student, course)).map((course) => ({ course, gap: course.capacity.target - enrollmentByCourse[course.id], count: enrollmentByCourse[course.id], key: deterministicKey(`${clusterId}|${label}|${student.studentId}|${course.id}`) })).sort((left, right) => right.gap - left.gap || left.count - right.count || left.key.localeCompare(right.key))[0]?.course
+    for (const student of submitters.filter((entry) => !assigned.has(entry.studentId))) {
+      const course = chooseFallback(student, 'fallback')
+      if (course) add(student, course, null, 'fallback_submitter', 'שיבוץ משלים לאחר מיצוי הקורסים שדורגו')
+      else warnings.push(`${student.displayLabel}: לא נמצא מקום פנוי במקבץ ${clusterId}`)
+    }
+    const nonSubmitters = input.students.filter((student) => !submitters.includes(student)).sort((left, right) => deterministicKey(`${clusterId}|non-submitter|${left.studentId}`).localeCompare(deterministicKey(`${clusterId}|non-submitter|${right.studentId}`)))
+    for (const student of nonSubmitters.filter((entry) => !assigned.has(entry.studentId))) {
+      const course = chooseFallback(student, 'non-submitter')
+      if (course) add(student, course, null, 'fallback_non_submitter', 'שיבוץ לאחר מתן קדימות למגישים')
+      else warnings.push(`${student.displayLabel}: לא נמצא מקום פנוי במקבץ ${clusterId}`)
+    }
+    for (const course of courses) {
+      if (enrollmentByCourse[course.id] < course.capacity.minimum) warnings.push(`${course.label}: מתחת לקיבולת המינימום`)
+      if (enrollmentByCourse[course.id] > course.capacity.maximum) warnings.push(`${course.label}: מעל לקיבולת המרבית`)
+    }
+  }
+  return { assignments, enrollmentByCourse, warnings, tieBreaks }
+}

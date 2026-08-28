@@ -1,4 +1,5 @@
 import type { ValidationIssue, VersionedEntity } from './types'
+import type { ClusterSnapshot } from './preferences'
 
 export const repeatPolicies = ['allowed', 'approval_required', 'discouraged', 'prohibited'] as const
 export type RepeatPolicy = (typeof repeatPolicies)[number]
@@ -32,6 +33,11 @@ export interface Course extends VersionedEntity {
   repeatPolicy: RepeatPolicy
   repeatPolicyConsultedWith?: string
   published: boolean
+}
+
+export interface CycleCatalogSnapshot extends VersionedEntity {
+  cycleId: string
+  clusters: ClusterSnapshot[]
 }
 
 export function validateCourse(course: Course): ValidationIssue[] {

@@ -4,8 +4,19 @@
   "version": "0.1.0",
   "type": "module",
   "main": "lib/index.js",
-  "engines": { "node": "22" },
-  "scripts": { "build": "tsc", "typecheck": "tsc --noEmit" },
-  "dependencies": { "firebase-admin": "^13.7.0", "firebase-functions": "^7.3.0" },
-  "devDependencies": { "typescript": "~6.0.2" }
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "tsc --noEmit && esbuild src/index.ts --bundle --platform=node --target=node22 --format=esm --packages=external --sourcemap --outfile=lib/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.7.0",
+    "firebase-functions": "^7.3.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "typescript": "~6.0.2"
+  }
 }

@@ -1,4 +1,5 @@
 import type { AssignmentCycle } from '../domain/cycle'
+import type { CycleCatalogSnapshot } from '../domain/catalog'
 import type { PreferenceSubmission } from '../domain/preferences'
 import type { AuditEvent } from '../domain/types'
 
@@ -14,6 +15,8 @@ export interface NativTransaction {
   getCycle(organizationId: string, cycleId: string): Promise<AssignmentCycle | null>
   listCycles(organizationId: string): Promise<AssignmentCycle[]>
   saveCycle(cycle: AssignmentCycle, expectedVersion: number): Promise<void>
+  getCatalogSnapshot(organizationId: string, cycleId: string): Promise<CycleCatalogSnapshot | null>
+  saveCatalogSnapshot(snapshot: CycleCatalogSnapshot, expectedVersion: number): Promise<void>
   getSubmission(organizationId: string, submissionId: string): Promise<PreferenceSubmission | null>
   listSubmissions(organizationId: string, cycleId: string): Promise<PreferenceSubmission[]>
   saveSubmission(submission: PreferenceSubmission, expectedVersion: number): Promise<void>

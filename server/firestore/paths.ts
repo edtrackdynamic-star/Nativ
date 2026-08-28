@@ -1,5 +1,6 @@
 const collections = {
   cycles: 'nativCycles',
+  catalogSnapshots: 'nativCatalogSnapshots',
   submissions: 'nativSubmissions',
   auditEvents: 'nativAuditEvents',
   idempotency: 'nativIdempotency',
@@ -17,6 +18,18 @@ export function organizationDocumentPath(organizationId: string): string {
 
 export function cycleDocumentPath(organizationId: string, cycleId: string): string {
   return `${organizationDocumentPath(organizationId)}/${collections.cycles}/${segment(cycleId, 'מזהה מחזור')}`
+}
+
+export function catalogSnapshotDocumentPath(organizationId: string, cycleId: string): string {
+  return `${organizationDocumentPath(organizationId)}/${collections.catalogSnapshots}/${segment(cycleId, 'מזהה מחזור')}`
+}
+
+export function workflowDocumentPath(organizationId: string, cycleId: string): string {
+  return `${organizationDocumentPath(organizationId)}/nativWorkflows/${cycleId}`
+}
+
+export function courseCatalogDocumentPath(organizationId: string, cycleId: string): string {
+  return `${organizationDocumentPath(organizationId)}/nativCourseCatalogs/${cycleId}`
 }
 
 export function submissionDocumentPath(organizationId: string, submissionId: string): string {

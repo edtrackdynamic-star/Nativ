@@ -7,10 +7,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { NativCommandService } from '../../src/application/NativCommandService'
 import type { ActorContext } from '../../src/domain/access'
 import { ConcurrentModificationError } from '../../src/domain/types'
-import { demoCycle, demoSubmission } from '../../src/demo/demoCycle'
+import { demoCatalogSnapshot, demoCycle, demoSubmission } from '../../src/demo/demoCycle'
 import { AuthorizationError } from '../../src/application/errors'
 import { FirestoreNativRepository } from './FirestoreNativRepository'
-import { auditEventDocumentPath, cycleDocumentPath, idempotencyDocumentPath, submissionDocumentPath } from './paths'
+import { auditEventDocumentPath, catalogSnapshotDocumentPath, cycleDocumentPath, idempotencyDocumentPath, submissionDocumentPath } from './paths'
 
 const projectId = 'demo-nativ-local'
 
@@ -81,6 +81,7 @@ describe('FirestoreNativRepository and locked rules', () => {
 
   beforeEach(async () => {
     await testEnvironment.clearFirestore()
+    await firestore.doc(catalogSnapshotDocumentPath(demoCycle.organizationId, demoCycle.id)).set(demoCatalogSnapshot)
   })
 
   afterAll(async () => {

@@ -1,11 +1,13 @@
 import type { IdempotencyRecord, NativRepository, NativTransaction } from '../../application/repository'
 import type { AssignmentCycle } from '../../domain/cycle'
+import type { CycleCatalogSnapshot } from '../../domain/catalog'
 import type { PreferenceSubmission } from '../../domain/preferences'
 import { ConcurrentModificationError } from '../../domain/types'
 import type { AuditEvent } from '../../domain/types'
 
 interface RepositoryState {
   cycles: Map<string, AssignmentCycle>
+  catalogSnapshots: Map<string, CycleCatalogSnapshot>
   submissions: Map<string, PreferenceSubmission>
   auditEvents: AuditEvent[]
   idempotencyRecords: Map<string, IdempotencyRecord>
@@ -13,6 +15,7 @@ interface RepositoryState {
 
 export interface InMemorySeed {
   cycles?: AssignmentCycle[]
+  catalogSnapshots?: CycleCatalogSnapshot[]
   submissions?: PreferenceSubmission[]
   auditEvents?: AuditEvent[]
 }
@@ -28,6 +31,7 @@ function cloneValue<T>(value: T): T {
 function cloneState(state: RepositoryState): RepositoryState {
   return {
     cycles: new Map([...state.cycles].map(([key, value]) => [key, cloneValue(value)])),
+    catalogSnapshots: new Map([...state.catalogSnapshots].map(([key, value]) => [key, cloneValue(value)])),
     submissions: new Map([...state.submissions].map(([key, value]) => [key, cloneValue(value)])),
     auditEvents: cloneValue(state.auditEvents),
     idempotencyRecords: new Map([...state.idempotencyRecords].map(([key, value]) => [key, cloneValue(value)])),
@@ -63,6 +67,20 @@ class InMemoryTransaction implements NativTransaction {
       throw new ConcurrentModificationError(expectedVersion + 1, cycle.version)
     }
     this.state.cycles.set(key, cloneValue(cycle))
+    return Promise.resolve()
+  }
+
+  getCatalogSnapshot(organizationId: string, cycleId: string): Promise<CycleCatalogSnapshot | null> {
+    const snapshot = this.state.catalogSnapshots.get(entityKey(organizationId, cycleId))
+    return Promise.resolve(snapshot ? cloneValue(snapshot) : null)
+  }
+
+  saveCatalogSnapshot(snapshot: CycleCatalogSnapshot, expectedVersion: number): Promise<void> {
+    const key = entityKey(snapshot.organizationId, snapshot.cycleId)
+    const currentVersion = this.state.catalogSnapshots.get(key)?.version ?? 0
+    if (currentVersion !== expectedVersion) throw new ConcurrentModificationError(expectedVersion, currentVersion)
+    if (snapshot.version !== expectedVersion + 1) throw new ConcurrentModificationError(expectedVersion + 1, snapshot.version)
+    this.state.catalogSnapshots.set(key, cloneValue(snapshot))
     return Promise.resolve()
   }
 
@@ -124,6 +142,7 @@ export class InMemoryNativRepository implements NativRepository {
   constructor(seed: InMemorySeed = {}) {
     this.state = {
       cycles: new Map((seed.cycles ?? []).map((cycle) => [entityKey(cycle.organizationId, cycle.id), cloneValue(cycle)])),
+      catalogSnapshots: new Map((seed.catalogSnapshots ?? []).map((snapshot) => [entityKey(snapshot.organizationId, snapshot.cycleId), cloneValue(snapshot)])),
       submissions: new Map((seed.submissions ?? []).map((submission) => [entityKey(submission.organizationId, submission.id), cloneValue(submission)])),
       auditEvents: cloneValue(seed.auditEvents ?? []),
       idempotencyRecords: new Map(),

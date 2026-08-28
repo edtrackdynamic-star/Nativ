@@ -1,4 +1,4 @@
-import type { Course, Cluster } from '../domain/catalog'
+import type { Course, Cluster, CycleCatalogSnapshot } from '../domain/catalog'
 import type { AssignmentCycle } from '../domain/cycle'
 import type { PreferenceSubmission } from '../domain/preferences'
 
@@ -44,6 +44,20 @@ export const demoCourses: Course[] = [
   demoCourse('course-code', 'cluster-tech', 'coding', 'פיתוח משחקים', 'טכנולוגיה'),
 ]
 
+export const demoCatalogSnapshot: CycleCatalogSnapshot = {
+  ...baseMetadata,
+  id: `catalog-${demoCycle.id}`,
+  cycleId: demoCycle.id,
+  clusters: demoClusters.map((cluster) => ({
+    clusterId: cluster.id,
+    label: cluster.label,
+    requiredRankingCount: cluster.requiredRankingCount,
+    courses: demoCourses
+      .filter((course) => course.clusterId === cluster.id)
+      .map((course) => ({ courseId: course.id, logicalCourseId: course.logicalCourseId, label: course.label })),
+  })),
+}
+
 export const demoSubmission: PreferenceSubmission = {
   ...baseMetadata,
   id: 'submission-demo-1',
@@ -53,12 +67,7 @@ export const demoSubmission: PreferenceSubmission = {
   status: 'submitted',
   source: 'nativ_app',
   submittedAt: '2026-08-28T09:00:00Z',
-  catalogSnapshot: demoClusters.map((cluster) => ({
-    clusterId: cluster.id,
-    label: cluster.label,
-    requiredRankingCount: cluster.requiredRankingCount,
-    courses: demoCourses.filter((course) => course.clusterId === cluster.id).map((course) => ({ courseId: course.id, logicalCourseId: course.logicalCourseId, label: course.label })),
-  })),
+  catalogSnapshot: structuredClone(demoCatalogSnapshot.clusters),
   preferences: [
     { clusterId: 'cluster-arts', rankings: [{ courseId: 'course-theater', rank: 1 }, { courseId: 'course-music', rank: 2 }, { courseId: 'course-art', rank: 3 }] },
     { clusterId: 'cluster-tech', rankings: [{ courseId: 'course-robotics', rank: 1 }, { courseId: 'course-code', rank: 2 }, { courseId: 'course-lab', rank: 3 }], rationale: 'אני רוצה לבנות ולחקור' },

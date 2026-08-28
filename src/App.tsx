@@ -1,6 +1,6 @@
 import './App.css'
 import { preparationStages } from './app/preparationStages'
-import { AdminCyclePanel } from './app/AdminCyclePanel'
+import { NativMvp } from './app/NativMvp'
 import { accessRoles } from './domain/access'
 import { validateCourse } from './domain/catalog'
 import { validatePreferenceSubmission } from './domain/preferences'
@@ -54,6 +54,8 @@ function App() {
           </div>
         </section>
 
+        <NativMvp />
+
         <section className="section" aria-labelledby="readiness-title">
           <div className="section-heading">
             <div><span className="eyebrow">תמונת מצב</span><h2 id="readiness-title">מוכנים להתקדם בלי לגעת במערכת הפעילה</h2></div>
@@ -81,8 +83,6 @@ function App() {
             <div><dt>בדיקות תקינות</dt><dd className={demoIssues.length ? 'has-issues' : 'is-valid'}>{demoIssues.length ? `${demoIssues.length} לבדיקה` : 'תקין'}</dd></div>
           </dl>
         </section>
-
-        <AdminCyclePanel initialCycle={demoCycle} />
 
         <section className="split-layout">
           <article className="panel" aria-labelledby="stages-title">

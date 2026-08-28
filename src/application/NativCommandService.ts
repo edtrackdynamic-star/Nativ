@@ -1,4 +1,5 @@
 import type { ActorContext } from '../domain/access'
+import type { CycleCatalogSnapshot } from '../domain/catalog'
 import { transitionCycle as applyCycleTransition, type AssignmentCycle, type CycleStatus } from '../domain/cycle'
 import { validatePreferenceSubmission, type PreferenceSubmission } from '../domain/preferences'
 import { DomainValidationError, type AuditEvent } from '../domain/types'
@@ -41,6 +42,11 @@ export interface SubmitPreferencesInput {
   auditEventId: string
 }
 
+export interface ChoiceContext {
+  cycle: AssignmentCycle
+  catalog: CycleCatalogSnapshot
+}
+
 function fingerprint(action: string, input: unknown): string {
   return JSON.stringify({ action, input })
 }
@@ -61,6 +67,23 @@ export class NativCommandService {
   async getCycle(actor: ActorContext, cycleId: string): Promise<AssignmentCycle> {
     assertCapability(actor, 'nativ.assignment.view')
     return this.repository.transact((transaction) => requireCycle(transaction, actor.organizationId, cycleId))
+  }
+
+  async getChoiceContext(actor: ActorContext, cycleId: string): Promise<ChoiceContext> {
+    return this.repository.transact(async (transaction) => {
+      const cycle = await requireCycle(transaction, actor.organizationId, cycleId)
+      const catalog = await transaction.getCatalogSnapshot(actor.organizationId, cycleId)
+      if (!catalog) throw new EntityNotFoundError('צילום קטלוג', cycleId)
+      return { cycle, catalog }
+    })
+  }
+
+  async listMySubmissions(actor: ActorContext, cycleId: string): Promise<PreferenceSubmission[]> {
+    return this.repository.transact(async (transaction) => {
+      await requireCycle(transaction, actor.organizationId, cycleId)
+      const submissions = await transaction.listSubmissions(actor.organizationId, cycleId)
+      return submissions.filter((submission) => submission.studentId === actor.uid)
+    })
   }
 
   async listAuditEvents(actor: ActorContext): Promise<AuditEvent[]> {
@@ -98,11 +121,14 @@ export class NativCommandService {
       if (input.draft.organizationId !== input.organizationId || input.draft.cycleId !== input.cycleId || input.draft.studentId !== input.studentId) {
         throw new DomainValidationError([{ code: 'draft.scope_mismatch', message: 'הטיוטה אינה תואמת לארגון, למחזור או לתלמיד', severity: 'error' }])
       }
+      const catalogSnapshot = await transaction.getCatalogSnapshot(input.organizationId, input.cycleId)
+      if (!catalogSnapshot) throw new EntityNotFoundError('צילום קטלוג', input.cycleId)
       const existing = await transaction.getSubmission(input.organizationId, input.draft.id)
       const savedDraft: PreferenceSubmission = {
         ...input.draft,
         status: 'draft',
         submittedAt: undefined,
+        catalogSnapshot: structuredClone(catalogSnapshot.clusters),
         version: input.expectedVersion + 1,
         createdAt: existing?.createdAt ?? input.occurredAt,
         createdBy: existing?.createdBy ?? actor.uid,

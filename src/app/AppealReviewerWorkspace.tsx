@@ -1,0 +1,11 @@
+import { useEffect, useState } from 'react'
+import type { WorkflowState } from '../domain/workflow'
+import { analyzeAppeal, getWorkflow } from './firebaseApi'
+
+export function AppealReviewerWorkspace({ cycleId }: { cycleId: string }) {
+  const [workflow, setWorkflow] = useState<WorkflowState | null>(null)
+  const [message, setMessage] = useState('טוען ערעורים…')
+  useEffect(() => { void getWorkflow(cycleId).then((value) => { setWorkflow(value); setMessage('המידע המקצועי לערעורים נטען.') }).catch((error: unknown) => setMessage(error instanceof Error ? error.message : 'הטעינה נכשלה')) }, [cycleId])
+  async function analyze(id: string) { try { const updated = await analyzeAppeal(cycleId, id); setWorkflow(updated); setMessage('ניתוח ההשפעה נשמר וזמין לצוות מקבלי ההחלטה.') } catch (error) { setMessage(error instanceof Error ? error.message : 'הניתוח נכשל') } }
+  return <section className="workspace-card" aria-labelledby="review-title"><div className="workspace-heading"><div><span className="eyebrow">צוות בחינת ערעורים</span><h2 id="review-title">מידע לפני החלטה</h2></div><span className="status-pill">בדיקה ללא ביצוע שינוי</span></div><p className="workspace-message" aria-live="polite">{message}</p>{workflow?.appeals.length ? workflow.appeals.map((appeal) => <article className="appeal-card" key={appeal.id}><strong>{appeal.studentId} · {appeal.clusterId}</strong><p>הבקשה: {appeal.requestedCourseId} · {appeal.reason}</p><p>הדירוג והנימוק במקבץ: {JSON.stringify(appeal.originalPreference)}</p><details><summary>פתיחת טופס הבחירה המקורי</summary><pre>{JSON.stringify(appeal.originalSubmission, null, 2)}</pre></details>{appeal.analysis ? <div className="impact-grid"><span>לפני: {appeal.analysis.beforeCourseId}</span><span>אחרי: {appeal.analysis.afterCourseId}</span><span>קיבולת: {appeal.analysis.capacityAfter.current}/{appeal.analysis.capacityAfter.maximum}</span><span>{appeal.analysis.createsDuplicateCourse ? 'כפילות קורס' : 'אין כפילות'}</span><span>{appeal.analysis.requiresMovingAnotherStudent ? 'נדרשת העברה נוספת' : 'אין העברה נוספת'}</span><span>{appeal.analysis.constraintViolations.join(', ') || 'אין הפרת אילוצים'}</span></div> : <button type="button" className="primary-action" onClick={() => void analyze(appeal.id)}>הפקת ניתוח השפעה</button>}</article>) : <p>אין כרגע ערעורים לבדיקה.</p>}</section>
+}

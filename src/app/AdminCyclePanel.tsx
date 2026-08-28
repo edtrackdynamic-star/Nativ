@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NativCommandService } from '../application/NativCommandService'
 import type { ActorContext } from '../domain/access'
 import type { AssignmentCycle, CycleStatus } from '../domain/cycle'
+import { demoCatalogSnapshot } from '../demo/demoCycle'
 import { InMemoryNativRepository } from '../infrastructure/local/InMemoryNativRepository'
 
 interface AdminCyclePanelProps {
@@ -35,7 +36,7 @@ const nextActions: Partial<Record<CycleStatus, { to: CycleStatus; label: string;
 }
 
 export function AdminCyclePanel({ initialCycle }: AdminCyclePanelProps) {
-  const [service] = useState(() => new NativCommandService(new InMemoryNativRepository({ cycles: [initialCycle] })))
+  const [service] = useState(() => new NativCommandService(new InMemoryNativRepository({ cycles: [initialCycle], catalogSnapshots: [demoCatalogSnapshot] })))
   const [cycle, setCycle] = useState(initialCycle)
   const [auditCount, setAuditCount] = useState(0)
   const [pending, setPending] = useState(false)

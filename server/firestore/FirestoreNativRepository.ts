@@ -8,10 +8,12 @@ import type {
 } from 'firebase-admin/firestore'
 import type { IdempotencyRecord, NativRepository, NativTransaction } from '../../src/application/repository'
 import type { AssignmentCycle } from '../../src/domain/cycle'
+import type { CycleCatalogSnapshot } from '../../src/domain/catalog'
 import type { PreferenceSubmission } from '../../src/domain/preferences'
 import { ConcurrentModificationError, type AuditEvent } from '../../src/domain/types'
 import {
   auditEventDocumentPath,
+  catalogSnapshotDocumentPath,
   cycleDocumentPath,
   idempotencyDocumentPath,
   organizationCollectionPath,
@@ -62,6 +64,20 @@ class FirestoreNativTransaction implements NativTransaction {
     this.hasWrites = true
     if (expectedVersion === 0) this.transaction.create(reference, cleanForFirestore(cycle))
     else this.transaction.set(reference, cleanForFirestore(cycle))
+  }
+
+  async getCatalogSnapshot(organizationId: string, cycleId: string): Promise<CycleCatalogSnapshot | null> {
+    const reference = this.firestore.doc(catalogSnapshotDocumentPath(organizationId, cycleId))
+    return documentValue<CycleCatalogSnapshot>(await this.getDocument(reference))
+  }
+
+  async saveCatalogSnapshot(snapshot: CycleCatalogSnapshot, expectedVersion: number): Promise<void> {
+    const reference = this.firestore.doc(catalogSnapshotDocumentPath(snapshot.organizationId, snapshot.cycleId))
+    const current = await this.getDocument(reference)
+    this.assertVersion(current, expectedVersion, snapshot.version)
+    this.hasWrites = true
+    if (expectedVersion === 0) this.transaction.create(reference, cleanForFirestore(snapshot))
+    else this.transaction.set(reference, cleanForFirestore(snapshot))
   }
 
   async getSubmission(organizationId: string, submissionId: string): Promise<PreferenceSubmission | null> {

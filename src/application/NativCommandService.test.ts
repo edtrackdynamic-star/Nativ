@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ActorContext } from '../domain/access'
-import { demoCycle, demoSubmission } from '../demo/demoCycle'
+import { demoCatalogSnapshot, demoCycle, demoSubmission } from '../demo/demoCycle'
 import { ConcurrentModificationError, DomainValidationError } from '../domain/types'
 import { InMemoryNativRepository } from '../infrastructure/local/InMemoryNativRepository'
 import { AuthorizationError, IdempotencyConflictError } from './errors'
@@ -33,7 +33,7 @@ function createDraft() {
 
 describe('NativCommandService cycle commands', () => {
   it('performs an authorized transition once and reuses an idempotent result', async () => {
-    const repository = new InMemoryNativRepository({ cycles: [demoCycle] })
+    const repository = new InMemoryNativRepository({ cycles: [demoCycle], catalogSnapshots: [demoCatalogSnapshot] })
     const service = new NativCommandService(repository)
     const input = {
       organizationId: demoCycle.organizationId,
@@ -53,7 +53,7 @@ describe('NativCommandService cycle commands', () => {
   })
 
   it('rejects an idempotency key reused for a different request', async () => {
-    const repository = new InMemoryNativRepository({ cycles: [demoCycle] })
+    const repository = new InMemoryNativRepository({ cycles: [demoCycle], catalogSnapshots: [demoCatalogSnapshot] })
     const service = new NativCommandService(repository)
     const base = {
       organizationId: demoCycle.organizationId, cycleId: demoCycle.id, expectedVersion: demoCycle.version,
@@ -64,7 +64,7 @@ describe('NativCommandService cycle commands', () => {
   })
 
   it('blocks a user without the management capability', async () => {
-    const service = new NativCommandService(new InMemoryNativRepository({ cycles: [demoCycle] }))
+    const service = new NativCommandService(new InMemoryNativRepository({ cycles: [demoCycle], catalogSnapshots: [demoCatalogSnapshot] }))
     await expect(service.transitionCycle(student, {
       organizationId: demoCycle.organizationId, cycleId: demoCycle.id, expectedVersion: demoCycle.version,
       to: 'choice_closed', reason: 'סגירה', occurredAt: '2026-08-28T12:00:00Z', idempotencyKey: 'student-close', auditEventId: 'audit-student-close',
@@ -72,7 +72,7 @@ describe('NativCommandService cycle commands', () => {
   })
 
   it('keeps optimistic concurrency checks inside the command transaction', async () => {
-    const service = new NativCommandService(new InMemoryNativRepository({ cycles: [demoCycle] }))
+    const service = new NativCommandService(new InMemoryNativRepository({ cycles: [demoCycle], catalogSnapshots: [demoCatalogSnapshot] }))
     await expect(service.transitionCycle(coordinator, {
       organizationId: demoCycle.organizationId, cycleId: demoCycle.id, expectedVersion: 0,
       to: 'choice_closed', reason: 'סגירה', occurredAt: '2026-08-28T12:00:00Z', idempotencyKey: 'stale-close', auditEventId: 'audit-stale-close',
@@ -82,7 +82,7 @@ describe('NativCommandService cycle commands', () => {
 
 describe('NativCommandService preference commands', () => {
   it('saves an incomplete draft for the student and records an audit event', async () => {
-    const repository = new InMemoryNativRepository({ cycles: [demoCycle] })
+    const repository = new InMemoryNativRepository({ cycles: [demoCycle], catalogSnapshots: [demoCatalogSnapshot] })
     const service = new NativCommandService(repository)
     const draft = createDraft()
     draft.preferences = []
@@ -95,7 +95,7 @@ describe('NativCommandService preference commands', () => {
   })
 
   it('submits an immutable version while preserving the draft', async () => {
-    const repository = new InMemoryNativRepository({ cycles: [demoCycle] })
+    const repository = new InMemoryNativRepository({ cycles: [demoCycle], catalogSnapshots: [demoCatalogSnapshot] })
     const service = new NativCommandService(repository)
     const saved = await service.saveDraft(student, {
       organizationId: demoCycle.organizationId, cycleId: demoCycle.id, studentId: student.uid,
@@ -112,7 +112,7 @@ describe('NativCommandService preference commands', () => {
   })
 
   it('rejects an incomplete draft at submission time', async () => {
-    const repository = new InMemoryNativRepository({ cycles: [demoCycle] })
+    const repository = new InMemoryNativRepository({ cycles: [demoCycle], catalogSnapshots: [demoCatalogSnapshot] })
     const service = new NativCommandService(repository)
     const draft = createDraft()
     draft.preferences = []
