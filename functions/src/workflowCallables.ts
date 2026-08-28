@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { getApps, initializeApp } from 'firebase-admin/app'
-import { getFirestore } from 'firebase-admin/firestore'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
 import type { ActorContext, CapabilityId } from '../../src/domain/access'
 import type { AiPriority, AssignmentStudent } from '../../src/domain/assignmentEngine'
@@ -11,11 +9,8 @@ import type { PreferenceSubmission } from '../../src/domain/preferences'
 import type { AiEvaluation, AppealImpactAnalysis, AppealRecord, NotificationRecord, WorkflowState } from '../../src/domain/workflow'
 import { redactDirectIdentifiers } from '../../src/integrations/ai/privacy'
 import { courseCatalogDocumentPath, cycleDocumentPath, organizationCollectionPath, workflowDocumentPath } from '../../server/firestore/paths'
-import { actorFromAuth, inputRecord, requiredInteger, requiredString } from './request'
-
-if (!getApps().length) initializeApp()
-const firestore = getFirestore()
-const callableOptions = { region: 'europe-west1' as const }
+import { callableOptions, nativFirestore as firestore } from './firebase'
+import { actorFromRequest, inputRecord, requiredInteger, requiredString } from './request'
 
 function requireCapability(actor: ActorContext, capability: CapabilityId) {
   if (!actor.capabilities.includes(capability)) throw new HttpsError('permission-denied', 'אין הרשאה לפעולה זו')
@@ -50,7 +45,7 @@ function latestSubmitted(submissions: PreferenceSubmission[]): PreferenceSubmiss
 }
 
 export const getWorkflow = onCall(callableOptions, async (request) => {
-  const actor = actorFromAuth(request.auth)
+  const actor = await actorFromRequest(request, 'read')
   const cycleId = requiredString(inputRecord(request.data), 'cycleId')
   const snapshot = await workflowRef(actor, cycleId).get()
   const workflow = snapshot.exists ? snapshot.data() as WorkflowState : emptyWorkflow(actor, cycleId, new Date().toISOString())
@@ -65,7 +60,7 @@ export const getWorkflow = onCall(callableOptions, async (request) => {
 })
 
 export const generateAiEvaluations = onCall(callableOptions, async (request) => {
-  const actor = actorFromAuth(request.auth)
+  const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.ai.review')
   const cycleId = requiredString(inputRecord(request.data), 'cycleId')
   const [cycleSnapshot, submissionsSnapshot] = await Promise.all([
@@ -94,7 +89,7 @@ export const generateAiEvaluations = onCall(callableOptions, async (request) => 
 })
 
 export const approveAiEvaluation = onCall(callableOptions, async (request) => {
-  const actor = actorFromAuth(request.auth)
+  const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.ai.review')
   const data = inputRecord(request.data)
   const cycleId = requiredString(data, 'cycleId')
@@ -118,7 +113,7 @@ export const approveAiEvaluation = onCall(callableOptions, async (request) => {
 })
 
 export const runAssignment = onCall(callableOptions, async (request) => {
-  const actor = actorFromAuth(request.auth)
+  const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.assignment.manage')
   const cycleId = requiredString(inputRecord(request.data), 'cycleId')
   const [cycleSnapshot, workflowSnapshot, catalogSnapshot, submissionsSnapshot] = await Promise.all([
@@ -141,7 +136,7 @@ export const runAssignment = onCall(callableOptions, async (request) => {
 })
 
 export const approveAssignmentRun = onCall(callableOptions, async (request) => {
-  const actor = actorFromAuth(request.auth)
+  const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.assignment.manage')
   const cycleId = requiredString(inputRecord(request.data), 'cycleId')
   const now = new Date().toISOString()
@@ -157,7 +152,7 @@ export const approveAssignmentRun = onCall(callableOptions, async (request) => {
 })
 
 export const publishAssignments = onCall(callableOptions, async (request) => {
-  const actor = actorFromAuth(request.auth)
+  const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.assignment.publish')
   const cycleId = requiredString(inputRecord(request.data), 'cycleId')
   const now = new Date().toISOString()
@@ -187,7 +182,7 @@ function analyze(current: WorkflowState, appeal: AppealRecord, courses: Course[]
 }
 
 export const submitAppeal = onCall(callableOptions, async (request) => {
-  const actor = actorFromAuth(request.auth)
+  const actor = await actorFromRequest(request)
   if (!actor.roles.includes('student')) throw new HttpsError('permission-denied', 'רק תלמיד יכול להגיש ערעור אישי')
   const data = inputRecord(request.data)
   const cycleId = requiredString(data, 'cycleId')
@@ -212,7 +207,7 @@ export const submitAppeal = onCall(callableOptions, async (request) => {
 })
 
 export const analyzeAppeal = onCall(callableOptions, async (request) => {
-  const actor = actorFromAuth(request.auth)
+  const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.appeal.review')
   const data = inputRecord(request.data)
   const cycleId = requiredString(data, 'cycleId')
@@ -234,7 +229,7 @@ export const analyzeAppeal = onCall(callableOptions, async (request) => {
 })
 
 export const decideAppeal = onCall(callableOptions, async (request) => {
-  const actor = actorFromAuth(request.auth)
+  const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.appeal.decide')
   const data = inputRecord(request.data)
   const cycleId = requiredString(data, 'cycleId')
@@ -256,7 +251,7 @@ export const decideAppeal = onCall(callableOptions, async (request) => {
 })
 
 export const executeAppealChange = onCall(callableOptions, async (request) => {
-  const actor = actorFromAuth(request.auth)
+  const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.assignment.manage')
   const data = inputRecord(request.data)
   const cycleId = requiredString(data, 'cycleId')

@@ -1,0 +1,12 @@
+{
+  "projects": {
+    "default": "edtrack-development"
+  },
+  "targets": {
+    "edtrack-development": {
+      "hosting": {
+        "nativ": ["edtrack-nativ"]
+      }
+    }
+  }
+}

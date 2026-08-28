@@ -1,6 +1,7 @@
 import type { CallableRequest } from 'firebase-functions/v2/https'
 import { HttpsError } from 'firebase-functions/v2/https'
 import { capabilityIds, roleIds, type ActorContext, type CapabilityId, type RoleId } from '../../src/domain/access'
+import { coreFirestore, nativFirestore } from './firebase'
 
 type CallableAuth = NonNullable<CallableRequest['auth']>
 
@@ -24,6 +25,80 @@ export function actorFromAuth(auth: CallableRequest['auth']): ActorContext {
     roles: allowedValues<RoleId>(token.roles, roleIds),
     capabilities: allowedValues<CapabilityId>(token.capabilities, capabilityIds),
   }
+}
+
+type AccessMode = 'full' | 'read_only'
+
+function timestampMillis(value: unknown): number | null {
+  if (!value || typeof value !== 'object' || !('toMillis' in value) || typeof value.toMillis !== 'function') return null
+  return value.toMillis()
+}
+
+function subscriptionAccess(data: Record<string, unknown> | undefined, now = Date.now()): AccessMode | null {
+  if (!data) return null
+  const status = String(data.commercialStatus ?? '')
+  if (!['trial', 'active'].includes(status)) return null
+  const endsAt = timestampMillis(data.endsAt)
+  if (!endsAt || now <= endsAt) return 'full'
+  const graceEndsAt = timestampMillis(data.graceEndsAt)
+  if (graceEndsAt && now <= graceEndsAt) return 'full'
+  const readOnlyUntil = timestampMillis(data.readOnlyUntil)
+  return readOnlyUntil && now <= readOnlyUntil ? 'read_only' : null
+}
+
+export interface ResolvedActor extends ActorContext {
+  accessMode: AccessMode
+  coreRole: string
+  displayName: string
+  email: string
+}
+
+export async function actorFromRequest(request: CallableRequest, operation: 'read' | 'write' = 'write'): Promise<ResolvedActor> {
+  if (process.env.FUNCTIONS_EMULATOR === 'true') {
+    const actor = actorFromAuth(request.auth)
+    return { ...actor, accessMode: 'full', coreRole: actor.roles.includes('student') ? 'student' : 'teacher', displayName: '', email: String(request.auth?.token.email ?? '') }
+  }
+  if (!request.auth) throw new HttpsError('unauthenticated', 'נדרשת כניסה למערכת')
+  const organizationId = String(request.auth.token.organizationId ?? '').trim().toLowerCase()
+  if (!/^[a-z0-9][a-z0-9-]{2,64}$/.test(organizationId)) throw new HttpsError('permission-denied', 'לא נמצא שיוך ארגוני פעיל')
+  const [organization, membership, subscription, productAccess] = await Promise.all([
+    coreFirestore.doc(`organizations/${organizationId}`).get(),
+    coreFirestore.doc(`organizations/${organizationId}/members/${request.auth.uid}`).get(),
+    coreFirestore.doc(`organizations/${organizationId}/productSubscriptions/nativ`).get(),
+    nativFirestore.doc(`organizations/${organizationId}/accessAssignments/${request.auth.uid}`).get(),
+  ])
+  const organizationData = organization.data()
+  const membershipData = membership.data()
+  if (!organization.exists || organizationData?.active !== true || !membership.exists || membershipData?.active !== true) {
+    throw new HttpsError('permission-denied', 'לא נמצאה חברות פעילה בארגון')
+  }
+  const accessMode = subscriptionAccess(subscription.data())
+  if (!accessMode || (operation === 'write' && accessMode !== 'full')) {
+    throw new HttpsError('permission-denied', operation === 'write' ? 'מנוי נתיב אינו מאפשר שינוי נתונים' : 'אין מנוי פעיל לנתיב')
+  }
+  const accessData = productAccess.data()
+  const assignedRoles = accessData?.active === false ? [] : allowedValues<RoleId>(accessData?.roles, roleIds)
+  const roles = membershipData?.role === 'student' ? [...new Set<RoleId>(['student', ...assignedRoles])] : assignedRoles
+  const capabilities = [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))]
+  return {
+    uid: request.auth.uid,
+    organizationId,
+    roles,
+    capabilities,
+    accessMode,
+    coreRole: String(membershipData?.role ?? ''),
+    displayName: String(membershipData?.fullName ?? request.auth.token.name ?? ''),
+    email: String(membershipData?.email ?? request.auth.token.email ?? ''),
+  }
+}
+
+export const roleCapabilityMap: Record<RoleId, CapabilityId[]> = {
+  access_manager: ['nativ.access.manage'],
+  placement_coordinator: ['nativ.assignment.view', 'nativ.assignment.manage', 'nativ.assignment.publish', 'nativ.ai.review', 'nativ.appeal.review', 'nativ.appeal.decide', 'nativ.audit.view'],
+  appeal_reviewer: ['nativ.assignment.view', 'nativ.appeal.review'],
+  secretary: [],
+  course_instructor: [],
+  student: [],
 }
 
 export function inputRecord(data: unknown): Record<string, unknown> {

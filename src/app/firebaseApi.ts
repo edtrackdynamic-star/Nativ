@@ -10,6 +10,7 @@ import { nativFunctions } from '../infrastructure/firebase/client'
 
 export interface DemoAccount { label: string; email: string; password: string }
 export interface AccessUserSummary { uid: string; email?: string; displayName?: string; roles: RoleId[]; capabilities: CapabilityId[]; active: boolean }
+export interface NativSessionAccess { organizationId: string; roles: RoleId[]; capabilities: CapabilityId[]; accessMode: 'full' | 'read_only'; coreRole: string; displayName: string; email: string }
 
 function functionsClient() {
   if (!nativFunctions) throw new Error('Firebase אינו מוגדר בסביבה זו')
@@ -18,6 +19,14 @@ function functionsClient() {
 
 export async function seedDemoEnvironment(): Promise<{ cycleId: string; accounts: DemoAccount[] }> {
   return (await httpsCallable<undefined, { cycleId: string; accounts: DemoAccount[] }>(functionsClient(), 'seedDemoEnvironment')()).data
+}
+
+export async function getMyNativAccess(): Promise<NativSessionAccess> {
+  return (await httpsCallable<undefined, NativSessionAccess>(functionsClient(), 'getMyNativAccess')()).data
+}
+
+export async function claimInitialAccessManager(): Promise<void> {
+  await httpsCallable<undefined, { activated: boolean }>(functionsClient(), 'claimInitialAccessManager')()
 }
 
 export async function getChoiceContext(cycleId: string): Promise<ChoiceContext> {

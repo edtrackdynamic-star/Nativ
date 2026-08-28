@@ -1,7 +1,8 @@
 {
-  "functions": { "source": "functions", "runtime": "nodejs22" },
-  "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
+  "functions": [{ "source": "functions", "codebase": "nativ", "runtime": "nodejs22" }],
+  "firestore": [{ "database": "nativ", "rules": "firestore.rules", "indexes": "firestore.indexes.json" }],
   "hosting": {
+    "target": "nativ",
     "public": "dist",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [{ "source": "**", "destination": "/index.html" }]

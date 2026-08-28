@@ -14,8 +14,11 @@ dist-ssr
 .env
 .env.*
 !.env.example
+!.env.production
 .firebaserc
+!.firebaserc
 firebase-debug.log
+.firebase/
 firestore-debug.log
 ui-debug.log
 functions/lib

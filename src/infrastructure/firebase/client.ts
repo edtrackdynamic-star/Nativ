@@ -3,7 +3,7 @@ import { connectAuthEmulator, getAuth } from 'firebase/auth'
 import { connectFunctionsEmulator, getFunctions } from 'firebase/functions'
 
 const localHost = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost'
-const emulatorMode = localHost || import.meta.env.DEV || import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true'
+export const emulatorMode = localHost || import.meta.env.DEV || import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true'
 const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || (emulatorMode ? 'demo-nativ-local' : '')
 const apiKey = import.meta.env.VITE_FIREBASE_API_KEY || (emulatorMode ? 'demo-api-key' : '')
 

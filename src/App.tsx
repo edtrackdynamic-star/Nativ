@@ -5,11 +5,12 @@ import { accessRoles } from './domain/access'
 import { validateCourse } from './domain/catalog'
 import { validatePreferenceSubmission } from './domain/preferences'
 import { demoClusters, demoCourses, demoCycle, demoSubmission } from './demo/demoCycle'
+import { emulatorMode } from './infrastructure/firebase/client'
 
 const readinessCards = [
-  { label: 'מעטפת המוצר', value: 'מוכנה לפיתוח', detail: 'יישום עצמאי, עברית ו־RTL, ללא תלות בממשק EdTrack.', tone: 'ready' },
-  { label: 'ליבה משותפת', value: 'ממתינה לחוזה', detail: 'זהות, ארגון ותלמידים יתחברו דרך מתאם שרת מאושר.', tone: 'waiting' },
-  { label: 'Gemini לנתיב', value: 'מבודד ומתוכנן', detail: 'פרויקט Cloud נפרד, מזהים אטומים ופלט המאושר בידי רכז.', tone: 'planned' },
+  { label: 'מעטפת המוצר', value: 'פעילה', detail: 'יישום עצמאי, עברית ו־RTL, עם אתר ופריסה נפרדים מ־EdTrack.', tone: 'ready' },
+  { label: 'ליבה משותפת', value: 'מחוברת', detail: 'זהות, ארגון וחברות נבדקים בצד השרת מול EdTrack.', tone: 'ready' },
+  { label: 'Gemini לנתיב', value: 'ממתין למפתח', detail: 'החיבור מבודד; לא יוצג פלט מדומה בסביבת הייצור.', tone: 'planned' },
 ] as const
 
 function RouteMark() {
@@ -37,15 +38,15 @@ function App() {
           <span className="brand-mark"><RouteMark /></span>
           <span><strong>נתיב</strong><small>בחירה ושיבוץ קורסים</small></span>
         </a>
-        <span className="environment-badge">סביבת הכנה מקומית</span>
+        <span className="environment-badge">{emulatorMode ? 'סביבת בדיקה מקומית' : 'מערכת בית־ספרית מאובטחת'}</span>
       </header>
 
       <main id="main">
         <section className="hero-panel" aria-labelledby="hero-title">
           <div className="hero-copy">
-            <span className="eyebrow">תשתית פיתוח ראשונית</span>
+            <span className="eyebrow">בחירה · שיבוץ · ערעורים</span>
             <h1 id="hero-title">כל תהליך הבחירה והשיבוץ, בנתיב אחד ברור.</h1>
-            <p>המערכת נבנית כמוצר עצמאי עם הרשאות מדויקות, היסטוריה מלאה וחיבור מבוקר בלבד לליבה הארגונית של EdTrack.</p>
+            <p>מוצר עצמאי עם הרשאות מדויקות, היסטוריה מלאה וחיבור מבוקר לזהות ולארגון של EdTrack.</p>
           </div>
           <div className="hero-visual" aria-label="המחשה של מסלול הבחירה והשיבוץ">
             <span className="route-node active">בחירה</span><span className="route-line" />
@@ -58,8 +59,8 @@ function App() {
 
         <section className="section" aria-labelledby="readiness-title">
           <div className="section-heading">
-            <div><span className="eyebrow">תמונת מצב</span><h2 id="readiness-title">מוכנים להתקדם בלי לגעת במערכת הפעילה</h2></div>
-            <span className="status-pill"><i /> ללא חיבור לנתוני אמת</span>
+            <div><span className="eyebrow">תמונת מצב</span><h2 id="readiness-title">נתיב פועלת כמערכת נפרדת על ליבה ארגונית משותפת</h2></div>
+            <span className="status-pill"><i /> {emulatorMode ? 'נתוני הדגמה' : 'חיבור מאובטח'}</span>
           </div>
           <div className="card-grid">
             {readinessCards.map((card) => (

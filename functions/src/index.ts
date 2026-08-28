@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { getApps, initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
-import { getFirestore } from 'firebase-admin/firestore'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
 import { NativCommandService } from '../../src/application/NativCommandService'
 import { AuthorizationError, EntityNotFoundError, IdempotencyConflictError } from '../../src/application/errors'
@@ -11,16 +9,13 @@ import { ConcurrentModificationError, DomainValidationError } from '../../src/do
 import { demoCatalogSnapshot, demoCourses, demoCycle } from '../../src/demo/demoCycle'
 import { FirestoreNativRepository } from '../../server/firestore/FirestoreNativRepository'
 import { catalogSnapshotDocumentPath, courseCatalogDocumentPath, cycleDocumentPath } from '../../server/firestore/paths'
-import { actorFromAuth, inputRecord, requiredInteger, requiredString } from './request'
+import { callableOptions, nativFirestore as firestore } from './firebase'
+import { actorFromRequest, inputRecord, requiredInteger, requiredString } from './request'
 
-if (!getApps().length) initializeApp()
-
-const firestore = getFirestore()
 const service = new NativCommandService(new FirestoreNativRepository(firestore))
-const callableOptions = { region: 'europe-west1' as const }
 
 export { analyzeAppeal, approveAiEvaluation, approveAssignmentRun, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, publishAssignments, runAssignment, submitAppeal } from './workflowCallables'
-export { listAccessUsers, setUserAccess } from './accessCallables'
+export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
 
 function mapError(error: unknown): never {
   if (error instanceof HttpsError) throw error
@@ -37,14 +32,14 @@ function parsePreferences(value: unknown): ClusterPreference[] {
   return value as ClusterPreference[]
 }
 
-export const getPreparationStatus = onCall(callableOptions, (request) => {
-  const actor = actorFromAuth(request.auth)
-  return { status: 'local_mvp', organizationId: actor.organizationId, liveDataConnected: false, edTrackDirectoryConnected: false, geminiConnected: false }
+export const getPreparationStatus = onCall(callableOptions, async (request) => {
+  const actor = await actorFromRequest(request, 'read')
+  return { status: process.env.FUNCTIONS_EMULATOR === 'true' ? 'local_mvp' : 'cloud_connected', organizationId: actor.organizationId, roles: actor.roles, accessMode: actor.accessMode, liveDataConnected: process.env.FUNCTIONS_EMULATOR !== 'true', edTrackDirectoryConnected: process.env.FUNCTIONS_EMULATOR !== 'true', geminiConnected: Boolean(process.env.NATIV_GEMINI_API_KEY) }
 })
 
 export const getCycle = onCall(callableOptions, async (request) => {
   try {
-    const actor = actorFromAuth(request.auth)
+    const actor = await actorFromRequest(request, 'read')
     const data = inputRecord(request.data)
     const cycleId = requiredString(data, 'cycleId')
     if (actor.roles.includes('student')) {
@@ -58,7 +53,7 @@ export const getCycle = onCall(callableOptions, async (request) => {
 
 export const getChoiceContext = onCall(callableOptions, async (request) => {
   try {
-    const actor = actorFromAuth(request.auth)
+    const actor = await actorFromRequest(request, 'read')
     const data = inputRecord(request.data)
     return await service.getChoiceContext(actor, requiredString(data, 'cycleId'))
   } catch (error) { return mapError(error) }
@@ -66,7 +61,7 @@ export const getChoiceContext = onCall(callableOptions, async (request) => {
 
 export const listMySubmissions = onCall(callableOptions, async (request) => {
   try {
-    const actor = actorFromAuth(request.auth)
+    const actor = await actorFromRequest(request, 'read')
     const data = inputRecord(request.data)
     return await service.listMySubmissions(actor, requiredString(data, 'cycleId'))
   } catch (error) { return mapError(error) }
@@ -74,7 +69,7 @@ export const listMySubmissions = onCall(callableOptions, async (request) => {
 
 export const transitionCycle = onCall(callableOptions, async (request) => {
   try {
-    const actor = actorFromAuth(request.auth)
+    const actor = await actorFromRequest(request)
     const data = inputRecord(request.data)
     const to = requiredString(data, 'to')
     if (!cycleStatuses.includes(to as (typeof cycleStatuses)[number])) throw new HttpsError('invalid-argument', 'מצב המחזור אינו תקין')
@@ -93,7 +88,7 @@ export const transitionCycle = onCall(callableOptions, async (request) => {
 
 export const savePreferenceDraft = onCall(callableOptions, async (request) => {
   try {
-    const actor = actorFromAuth(request.auth)
+    const actor = await actorFromRequest(request)
     const data = inputRecord(request.data)
     const cycleId = requiredString(data, 'cycleId')
     const occurredAt = new Date().toISOString()
@@ -128,7 +123,7 @@ export const savePreferenceDraft = onCall(callableOptions, async (request) => {
 
 export const submitPreferences = onCall(callableOptions, async (request) => {
   try {
-    const actor = actorFromAuth(request.auth)
+    const actor = await actorFromRequest(request)
     const data = inputRecord(request.data)
     const cycleId = requiredString(data, 'cycleId')
     const submissionVersion = requiredInteger(data, 'submissionVersion')
@@ -148,7 +143,7 @@ export const submitPreferences = onCall(callableOptions, async (request) => {
 })
 
 export const listAuditEvents = onCall(callableOptions, async (request) => {
-  try { return await service.listAuditEvents(actorFromAuth(request.auth)) }
+  try { return await service.listAuditEvents(await actorFromRequest(request, 'read')) }
   catch (error) { return mapError(error) }
 })
 
