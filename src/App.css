@@ -45,6 +45,20 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .domain-summary dd { margin: 5px 0 0; color: var(--ink-strong); font-weight: 900; }
 .domain-summary dd.is-valid { color: #15803d; }
 .domain-summary dd.has-issues { color: #b45309; }
+.admin-cycle-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(180px, auto); align-items: center; gap: 26px; margin-top: 18px; padding: 26px 28px; border: 1px solid var(--line); border-radius: 22px; background: rgba(255,255,255,.9); box-shadow: 0 14px 40px rgba(15,23,42,.055); }
+.admin-cycle-panel h2 { margin: 5px 0 7px; color: var(--ink-strong); font-size: 1.35rem; }
+.admin-cycle-panel p { max-width: 540px; margin: 0; color: var(--ink-muted); font-size: .82rem; line-height: 1.55; }
+.admin-cycle-metrics { display: grid; grid-template-columns: repeat(3, minmax(88px, 1fr)); gap: 8px; margin: 0; }
+.admin-cycle-metrics div { padding: 11px 13px; border-radius: 13px; background: #f8fafc; text-align: center; }
+.admin-cycle-metrics dt { color: var(--ink-muted); font-size: .65rem; font-weight: 800; }
+.admin-cycle-metrics dd { margin: 5px 0 0; color: var(--ink-strong); font-size: .88rem; font-weight: 900; white-space: nowrap; }
+.admin-cycle-actions { display: grid; gap: 8px; justify-items: stretch; }
+.admin-cycle-actions button { min-height: 44px; padding: 0 18px; border: 0; border-radius: 13px; color: white; background: linear-gradient(135deg, var(--brand-indigo), #4338ca); font-weight: 800; cursor: pointer; box-shadow: 0 9px 22px rgba(79,70,229,.2); }
+.admin-cycle-actions button:hover:not(:disabled) { transform: translateY(-1px); }
+.admin-cycle-actions button:focus-visible { outline: 3px solid rgba(6,182,212,.35); outline-offset: 3px; }
+.admin-cycle-actions button:disabled { cursor: wait; opacity: .65; }
+.admin-cycle-actions small { max-width: 220px; color: var(--ink-muted); font-size: .64rem; line-height: 1.45; text-align: center; }
+.cycle-complete { padding: 11px 16px; border-radius: 13px; color: #166534; background: #dcfce7; font-weight: 900; text-align: center; }
 .split-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(310px, .75fr); gap: 18px; padding-top: 18px; }
 .panel { padding: 26px; }
 .stage-list { list-style: none; margin: 0; padding: 0; }
@@ -61,6 +75,7 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .role-row { display: grid; grid-template-columns: 42px 1fr; align-items: start; gap: 12px; padding: 13px 0; }
 .role-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; background: #eef2ff; color: #4338ca; font-weight: 900; }
 .privacy-note { margin: 18px 0 0; padding: 14px; border-radius: 14px; color: #334155; background: #f8fafc; font-size: .78rem; line-height: 1.6; }
+@media (max-width: 1000px) { .admin-cycle-panel { grid-template-columns: 1fr; } .admin-cycle-actions { justify-items: start; } .admin-cycle-actions small { text-align: start; } }
 @media (max-width: 900px) { .hero-panel { grid-template-columns: 1fr; padding-block: 48px; } .hero-visual { justify-content: start; } .card-grid, .split-layout, .domain-summary { grid-template-columns: 1fr; } }
 @media (max-width: 680px) { .domain-summary dl { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 560px) { .topbar, main { width: min(100% - 24px, 1180px); } .environment-badge { display: none; } .hero-panel { min-height: auto; padding: 36px 22px; border-radius: 22px; } .hero-panel h1 { font-size: 2.3rem; } .route-node { width: 64px; height: 64px; } .section-heading { align-items: start; flex-direction: column; } .stage-list li { grid-template-columns: 36px 1fr; } .stage-status { grid-column: 2; justify-self: start; } .panel { padding: 20px; } .domain-summary { padding: 21px; } }
+@media (max-width: 560px) { .topbar, main { width: min(100% - 24px, 1180px); } .environment-badge { display: none; } .hero-panel { min-height: auto; padding: 36px 22px; border-radius: 22px; } .hero-panel h1 { font-size: 2.3rem; } .route-node { width: 64px; height: 64px; } .section-heading { align-items: start; flex-direction: column; } .stage-list li { grid-template-columns: 36px 1fr; } .stage-status { grid-column: 2; justify-self: start; } .panel { padding: 20px; } .domain-summary, .admin-cycle-panel { padding: 21px; } .admin-cycle-metrics { grid-template-columns: 1fr; width: 100%; } .admin-cycle-metrics div { display: flex; align-items: center; justify-content: space-between; text-align: start; } .admin-cycle-metrics dd { margin: 0; } }
