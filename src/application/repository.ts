@@ -11,16 +11,16 @@ export interface IdempotencyRecord {
 }
 
 export interface NativTransaction {
-  getCycle(organizationId: string, cycleId: string): AssignmentCycle | null
-  listCycles(organizationId: string): AssignmentCycle[]
-  saveCycle(cycle: AssignmentCycle, expectedVersion: number): void
-  getSubmission(organizationId: string, submissionId: string): PreferenceSubmission | null
-  listSubmissions(organizationId: string, cycleId: string): PreferenceSubmission[]
-  saveSubmission(submission: PreferenceSubmission, expectedVersion: number): void
-  appendAuditEvent(event: AuditEvent): void
-  listAuditEvents(organizationId: string): AuditEvent[]
-  getIdempotencyRecord(organizationId: string, key: string): IdempotencyRecord | null
-  saveIdempotencyRecord(record: IdempotencyRecord): void
+  getCycle(organizationId: string, cycleId: string): Promise<AssignmentCycle | null>
+  listCycles(organizationId: string): Promise<AssignmentCycle[]>
+  saveCycle(cycle: AssignmentCycle, expectedVersion: number): Promise<void>
+  getSubmission(organizationId: string, submissionId: string): Promise<PreferenceSubmission | null>
+  listSubmissions(organizationId: string, cycleId: string): Promise<PreferenceSubmission[]>
+  saveSubmission(submission: PreferenceSubmission, expectedVersion: number): Promise<void>
+  appendAuditEvent(event: AuditEvent): Promise<void>
+  listAuditEvents(organizationId: string): Promise<AuditEvent[]>
+  getIdempotencyRecord(organizationId: string, key: string): Promise<IdempotencyRecord | null>
+  saveIdempotencyRecord(record: IdempotencyRecord): Promise<void>
 }
 
 export interface NativRepository {

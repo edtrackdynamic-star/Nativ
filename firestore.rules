@@ -2,7 +2,13 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // כל הגישה חסומה עד שמודל ההרשאות והפעולות בצד השרת יאושרו וייבדקו.
+    // נתוני נתיב נכתבים ונקראים בשלב זה רק דרך פעולות שרת מורשות.
+    // Admin SDK עוקף Rules ולכן ההרשאה העסקית נאכפת גם בשכבת היישום.
+    match /organizations/{organizationId}/{nativDocument=**} {
+      allow read, write: if false;
+    }
+
+    // ברירת המחדל נשארת סגורה גם למסלולים עתידיים שלא הוגדרו במפורש.
     match /{document=**} {
       allow read, write: if false;
     }

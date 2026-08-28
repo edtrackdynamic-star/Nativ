@@ -15,8 +15,8 @@ describe('InMemoryNativRepository', () => {
 
   it('rolls back all writes when a transaction fails', async () => {
     const repository = new InMemoryNativRepository({ cycles: [demoCycle] })
-    await expect(repository.transact((transaction) => {
-      transaction.appendAuditEvent({ id: 'audit-failed', organizationId: demoCycle.organizationId, actorId: 'user-1', occurredAt: '2026-08-28T08:00:00Z', action: 'test', entityType: 'test', entityId: 'test', reason: 'test' })
+    await expect(repository.transact(async (transaction) => {
+      await transaction.appendAuditEvent({ id: 'audit-failed', organizationId: demoCycle.organizationId, actorId: 'user-1', occurredAt: '2026-08-28T08:00:00Z', action: 'test', entityType: 'test', entityId: 'test', reason: 'test' })
       throw new Error('failure')
     })).rejects.toThrow('failure')
     const audits = await repository.transact((transaction) => transaction.listAuditEvents(demoCycle.organizationId))
@@ -25,8 +25,8 @@ describe('InMemoryNativRepository', () => {
 
   it('blocks a stale entity save', async () => {
     const repository = new InMemoryNativRepository({ cycles: [demoCycle] })
-    await expect(repository.transact((transaction) => {
-      transaction.saveCycle({ ...demoCycle, version: demoCycle.version + 1 }, demoCycle.version - 1)
+    await expect(repository.transact(async (transaction) => {
+      await transaction.saveCycle({ ...demoCycle, version: demoCycle.version + 1 }, demoCycle.version - 1)
     })).rejects.toThrow(ConcurrentModificationError)
   })
 })

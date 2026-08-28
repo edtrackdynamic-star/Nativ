@@ -41,19 +41,19 @@ class InMemoryTransaction implements NativTransaction {
     this.state = state
   }
 
-  getCycle(organizationId: string, cycleId: string): AssignmentCycle | null {
+  getCycle(organizationId: string, cycleId: string): Promise<AssignmentCycle | null> {
     const cycle = this.state.cycles.get(entityKey(organizationId, cycleId))
-    return cycle ? cloneValue(cycle) : null
+    return Promise.resolve(cycle ? cloneValue(cycle) : null)
   }
 
-  listCycles(organizationId: string): AssignmentCycle[] {
-    return [...this.state.cycles.values()]
+  listCycles(organizationId: string): Promise<AssignmentCycle[]> {
+    return Promise.resolve([...this.state.cycles.values()]
       .filter((cycle) => cycle.organizationId === organizationId)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map((cycle) => cloneValue(cycle))
+      .map((cycle) => cloneValue(cycle)))
   }
 
-  saveCycle(cycle: AssignmentCycle, expectedVersion: number): void {
+  saveCycle(cycle: AssignmentCycle, expectedVersion: number): Promise<void> {
     const key = entityKey(cycle.organizationId, cycle.id)
     const currentVersion = this.state.cycles.get(key)?.version ?? 0
     if (currentVersion !== expectedVersion) {
@@ -63,21 +63,22 @@ class InMemoryTransaction implements NativTransaction {
       throw new ConcurrentModificationError(expectedVersion + 1, cycle.version)
     }
     this.state.cycles.set(key, cloneValue(cycle))
+    return Promise.resolve()
   }
 
-  getSubmission(organizationId: string, submissionId: string): PreferenceSubmission | null {
+  getSubmission(organizationId: string, submissionId: string): Promise<PreferenceSubmission | null> {
     const submission = this.state.submissions.get(entityKey(organizationId, submissionId))
-    return submission ? cloneValue(submission) : null
+    return Promise.resolve(submission ? cloneValue(submission) : null)
   }
 
-  listSubmissions(organizationId: string, cycleId: string): PreferenceSubmission[] {
-    return [...this.state.submissions.values()]
+  listSubmissions(organizationId: string, cycleId: string): Promise<PreferenceSubmission[]> {
+    return Promise.resolve([...this.state.submissions.values()]
       .filter((submission) => submission.organizationId === organizationId && submission.cycleId === cycleId)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map((submission) => cloneValue(submission))
+      .map((submission) => cloneValue(submission)))
   }
 
-  saveSubmission(submission: PreferenceSubmission, expectedVersion: number): void {
+  saveSubmission(submission: PreferenceSubmission, expectedVersion: number): Promise<void> {
     const key = entityKey(submission.organizationId, submission.id)
     const currentVersion = this.state.submissions.get(key)?.version ?? 0
     if (currentVersion !== expectedVersion) {
@@ -87,29 +88,32 @@ class InMemoryTransaction implements NativTransaction {
       throw new ConcurrentModificationError(expectedVersion + 1, submission.version)
     }
     this.state.submissions.set(key, cloneValue(submission))
+    return Promise.resolve()
   }
 
-  appendAuditEvent(event: AuditEvent): void {
+  appendAuditEvent(event: AuditEvent): Promise<void> {
     if (this.state.auditEvents.some((candidate) => candidate.id === event.id)) {
       throw new Error(`אירוע ביקורת כפול: ${event.id}`)
     }
     this.state.auditEvents.push(cloneValue(event))
+    return Promise.resolve()
   }
 
-  listAuditEvents(organizationId: string): AuditEvent[] {
-    return this.state.auditEvents
+  listAuditEvents(organizationId: string): Promise<AuditEvent[]> {
+    return Promise.resolve(this.state.auditEvents
       .filter((event) => event.organizationId === organizationId)
       .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt))
-      .map((event) => cloneValue(event))
+      .map((event) => cloneValue(event)))
   }
 
-  getIdempotencyRecord(organizationId: string, key: string): IdempotencyRecord | null {
+  getIdempotencyRecord(organizationId: string, key: string): Promise<IdempotencyRecord | null> {
     const record = this.state.idempotencyRecords.get(entityKey(organizationId, key))
-    return record ? cloneValue(record) : null
+    return Promise.resolve(record ? cloneValue(record) : null)
   }
 
-  saveIdempotencyRecord(record: IdempotencyRecord): void {
+  saveIdempotencyRecord(record: IdempotencyRecord): Promise<void> {
     this.state.idempotencyRecords.set(entityKey(record.organizationId, record.key), cloneValue(record))
+    return Promise.resolve()
   }
 }
 

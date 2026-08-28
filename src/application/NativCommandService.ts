@@ -45,8 +45,8 @@ function fingerprint(action: string, input: unknown): string {
   return JSON.stringify({ action, input })
 }
 
-function requireCycle(transaction: NativTransaction, organizationId: string, cycleId: string): AssignmentCycle {
-  const cycle = transaction.getCycle(organizationId, cycleId)
+async function requireCycle(transaction: NativTransaction, organizationId: string, cycleId: string): Promise<AssignmentCycle> {
+  const cycle = await transaction.getCycle(organizationId, cycleId)
   if (!cycle) throw new EntityNotFoundError('מחזור', cycleId)
   return cycle
 }
@@ -71,8 +71,8 @@ export class NativCommandService {
   async transitionCycle(actor: ActorContext, input: TransitionCycleInput): Promise<AssignmentCycle> {
     assertOrganizationScope(actor, input.organizationId)
     assertCapability(actor, 'nativ.assignment.manage')
-    return this.executeIdempotently(input.organizationId, input.idempotencyKey, fingerprint('transitionCycle', input), input.occurredAt, (transaction) => {
-      const current = requireCycle(transaction, input.organizationId, input.cycleId)
+    return this.executeIdempotently(input.organizationId, input.idempotencyKey, fingerprint('transitionCycle', input), input.occurredAt, async (transaction) => {
+      const current = await requireCycle(transaction, input.organizationId, input.cycleId)
       const result = applyCycleTransition(current, {
         expectedVersion: input.expectedVersion,
         to: input.to,
@@ -81,8 +81,8 @@ export class NativCommandService {
         reason: input.reason,
         auditEventId: input.auditEventId,
       })
-      transaction.saveCycle(result.cycle, input.expectedVersion)
-      transaction.appendAuditEvent(result.auditEvent)
+      await transaction.saveCycle(result.cycle, input.expectedVersion)
+      await transaction.appendAuditEvent(result.auditEvent)
       return result.cycle
     })
   }
@@ -90,15 +90,15 @@ export class NativCommandService {
   async saveDraft(actor: ActorContext, input: SaveDraftInput): Promise<PreferenceSubmission> {
     assertOrganizationScope(actor, input.organizationId)
     assertStudentSelfOrManager(actor, input.studentId)
-    return this.executeIdempotently(input.organizationId, input.idempotencyKey, fingerprint('saveDraft', input), input.occurredAt, (transaction) => {
-      const cycle = requireCycle(transaction, input.organizationId, input.cycleId)
+    return this.executeIdempotently(input.organizationId, input.idempotencyKey, fingerprint('saveDraft', input), input.occurredAt, async (transaction) => {
+      const cycle = await requireCycle(transaction, input.organizationId, input.cycleId)
       if (cycle.status !== 'choice_open') {
         throw new DomainValidationError([{ code: 'draft.choice_not_open', message: 'ניתן לשמור טיוטה רק כאשר הבחירה פתוחה', severity: 'error' }])
       }
       if (input.draft.organizationId !== input.organizationId || input.draft.cycleId !== input.cycleId || input.draft.studentId !== input.studentId) {
         throw new DomainValidationError([{ code: 'draft.scope_mismatch', message: 'הטיוטה אינה תואמת לארגון, למחזור או לתלמיד', severity: 'error' }])
       }
-      const existing = transaction.getSubmission(input.organizationId, input.draft.id)
+      const existing = await transaction.getSubmission(input.organizationId, input.draft.id)
       const savedDraft: PreferenceSubmission = {
         ...input.draft,
         status: 'draft',
@@ -109,8 +109,8 @@ export class NativCommandService {
         updatedAt: input.occurredAt,
         updatedBy: actor.uid,
       }
-      transaction.saveSubmission(savedDraft, input.expectedVersion)
-      transaction.appendAuditEvent({
+      await transaction.saveSubmission(savedDraft, input.expectedVersion)
+      await transaction.appendAuditEvent({
         id: input.auditEventId,
         organizationId: input.organizationId,
         actorId: actor.uid,
@@ -129,9 +129,9 @@ export class NativCommandService {
   async submitPreferences(actor: ActorContext, input: SubmitPreferencesInput): Promise<PreferenceSubmission> {
     assertOrganizationScope(actor, input.organizationId)
     assertStudentSelfOrManager(actor, input.studentId)
-    return this.executeIdempotently(input.organizationId, input.idempotencyKey, fingerprint('submitPreferences', input), input.occurredAt, (transaction) => {
-      const cycle = requireCycle(transaction, input.organizationId, input.cycleId)
-      const draft = transaction.getSubmission(input.organizationId, input.draftId)
+    return this.executeIdempotently(input.organizationId, input.idempotencyKey, fingerprint('submitPreferences', input), input.occurredAt, async (transaction) => {
+      const cycle = await requireCycle(transaction, input.organizationId, input.cycleId)
+      const draft = await transaction.getSubmission(input.organizationId, input.draftId)
       if (!draft) throw new EntityNotFoundError('טיוטה', input.draftId)
       if (draft.version !== input.expectedDraftVersion) {
         throw new DomainValidationError([{ code: 'submission.draft_version_changed', message: 'הטיוטה השתנתה ויש לרענן לפני ההגשה', severity: 'error' }])
@@ -154,8 +154,8 @@ export class NativCommandService {
       }
       const issues = validatePreferenceSubmission(submitted, cycle)
       if (issues.length) throw new DomainValidationError(issues)
-      transaction.saveSubmission(submitted, 0)
-      transaction.appendAuditEvent({
+      await transaction.saveSubmission(submitted, 0)
+      await transaction.appendAuditEvent({
         id: input.auditEventId,
         organizationId: input.organizationId,
         actorId: actor.uid,
@@ -175,19 +175,19 @@ export class NativCommandService {
     idempotencyKey: string,
     requestFingerprint: string,
     completedAt: string,
-    operation: (transaction: NativTransaction) => TResult,
+    operation: (transaction: NativTransaction) => TResult | Promise<TResult>,
   ): Promise<TResult> {
     if (!idempotencyKey.trim()) {
       throw new DomainValidationError([{ code: 'command.idempotency_key_required', message: 'נדרש מזהה פעולה אידמפוטנטי', severity: 'error' }])
     }
-    return this.repository.transact((transaction) => {
-      const existing = transaction.getIdempotencyRecord(organizationId, idempotencyKey)
+    return this.repository.transact(async (transaction) => {
+      const existing = await transaction.getIdempotencyRecord(organizationId, idempotencyKey)
       if (existing) {
         if (existing.fingerprint !== requestFingerprint) throw new IdempotencyConflictError()
         return existing.result as TResult
       }
-      const result = operation(transaction)
-      transaction.saveIdempotencyRecord({ organizationId, key: idempotencyKey, fingerprint: requestFingerprint, result, completedAt })
+      const result = await operation(transaction)
+      await transaction.saveIdempotencyRecord({ organizationId, key: idempotencyKey, fingerprint: requestFingerprint, result, completedAt })
       return result
     })
   }

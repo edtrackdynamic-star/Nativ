@@ -11,19 +11,25 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "check": "pnpm lint && pnpm typecheck && pnpm server:typecheck && pnpm test && pnpm build",
     "functions:build": "pnpm --dir functions build",
-    "emulators": "firebase emulators:start"
+    "server:typecheck": "tsc -p tsconfig.server.json",
+    "test:emulator": "firebase emulators:exec --only firestore --project demo-nativ-local \"pnpm vitest run --config vitest.emulator.config.ts\"",
+    "emulators": "firebase emulators:start --project demo-nativ-local"
   },
   "dependencies": {
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.1.0",
+    "firebase": "^12.18.0",
+    "firebase-admin": "^13.10.0",
+    "firebase-tools": "^15.28.1",
     "oxlint": "^1.79.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.2",
