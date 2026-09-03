@@ -6,6 +6,8 @@ import type { AssignmentCycle } from '../../src/domain/cycle'
 import type { PreferenceSubmission } from '../../src/domain/preferences'
 import type { WorkflowState } from '../../src/domain/workflow'
 import { demoCycle, demoSubmission } from '../../src/demo/demoCycle'
+import { initializeApp as initializeAdminApp, deleteApp as deleteAdminApp } from 'firebase-admin/app'
+import { getFirestore } from 'firebase-admin/firestore'
 
 interface SeedResult {
   cycleId: string
@@ -13,10 +15,13 @@ interface SeedResult {
 }
 
 describe('Nativ callable system flow', () => {
+  if (!process.env.FIRESTORE_EMULATOR_HOST) throw new Error('Emulator required')
   let app: FirebaseApp
   let auth: Auth
   let functions: Functions
   let accounts: SeedResult['accounts']
+  const adminApp = initializeAdminApp({ projectId: 'demo-nativ-local' }, 'mail-system-test')
+  const mailEvents = () => getFirestore(adminApp).collection(`organizations/${demoCycle.organizationId}/mailEvents`).get()
 
   beforeAll(async () => {
     app = initializeApp({ projectId: 'demo-nativ-local', apiKey: 'demo-api-key' }, 'nativ-system-test')
@@ -31,6 +36,7 @@ describe('Nativ callable system flow', () => {
   afterAll(async () => {
     if (auth) await signOut(auth)
     if (app) await deleteApp(app)
+    await deleteAdminApp(adminApp)
   })
 
   it('authenticates a coordinator and resolves the organization context', async () => {
@@ -121,6 +127,12 @@ describe('Nativ callable system flow', () => {
     workflow = (await publish({ cycleId: demoCycle.id })).data
     expect(workflow.assignmentRun?.publishedAt).toBeTruthy()
     expect(workflow.notifications).toHaveLength(4)
+    const publicationEvents = await mailEvents()
+    expect(publicationEvents.size).toBe(1)
+    expect(publicationEvents.docs[0].data().jobs).toHaveLength(2)
+    expect(JSON.stringify(publicationEvents.docs[0].data())).not.toMatch(/rationale|originalSubmission|aiEvaluation|explanation/)
+    await expect(publish({ cycleId: demoCycle.id })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+    expect((await mailEvents()).size).toBe(1)
     await transition({ cycleId: demoCycle.id, expectedVersion: 4, to: 'appeals', reason: 'פתיחת ערעורים בבדיקת מערכת', idempotencyKey: 'system-open-appeals' })
 
     await signOut(auth)
@@ -144,12 +156,21 @@ describe('Nativ callable system flow', () => {
     workflow = (await decide({ cycleId: demoCycle.id, appealId: appeal.id, outcome: 'approved', reason: 'אפשרי לאחר ניתוח' })).data
     expect(workflow.assignmentRun!.assignments.find((entry) => entry.studentId === 'student-demo-001' && entry.clusterId === 'cluster-arts')!.courseId).toBe(current.courseId)
     expect(workflow.appeals.find((entry) => entry.id === appeal.id)?.status).toBe('approved_pending_execution')
+    expect((await mailEvents()).size).toBe(1)
 
     const execute = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'executeAppealChange')
     workflow = (await execute({ cycleId: demoCycle.id, appealId: appeal.id, expectedWorkflowVersion: workflow.version })).data
     expect(workflow.assignmentRun!.assignments.find((entry) => entry.studentId === 'student-demo-001' && entry.clusterId === 'cluster-arts')!.courseId).toBe(requestedCourseId)
     expect(workflow.appeals.find((entry) => entry.id === appeal.id)?.status).toBe('executed')
     expect(workflow.notifications.filter((entry) => entry.audience === 'secretary')).toHaveLength(2)
+    expect(workflow.notifications.filter((entry) => entry.audience === 'student' && entry.channel === 'email')).toHaveLength(3)
+    const changeEvents = await mailEvents()
+    expect(changeEvents.size).toBe(2)
+    const change = changeEvents.docs.find((doc) => doc.id.startsWith('appeal-'))!.data()
+    expect(change.jobs.map((job: { audience: string }) => job.audience)).toEqual(['secretary', 'student'])
+    expect(JSON.stringify(change)).not.toMatch(/rationale|originalSubmission|aiEvaluation|reason|analysis/)
+    await expect(execute({ cycleId: demoCycle.id, appealId: appeal.id, expectedWorkflowVersion: workflow.version })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+    expect((await mailEvents()).size).toBe(2)
   })
 
   it('keeps access management separate from professional data and supports multiple role holders', async () => {

@@ -16,6 +16,7 @@ const service = new NativCommandService(new FirestoreNativRepository(firestore))
 
 export { analyzeAppeal, approveAiEvaluation, approveAssignmentRun, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, publishAssignments, runAssignment, submitAppeal } from './workflowCallables'
 export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
+export { deliverNativMail } from './mailDelivery'
 
 function mapError(error: unknown): never {
   if (error instanceof HttpsError) throw error

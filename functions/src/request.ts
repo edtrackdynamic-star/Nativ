@@ -34,7 +34,7 @@ function timestampMillis(value: unknown): number | null {
   return value.toMillis()
 }
 
-function subscriptionAccess(data: Record<string, unknown> | undefined, now = Date.now()): AccessMode | null {
+export function subscriptionAccess(data: Record<string, unknown> | undefined, now = Date.now()): AccessMode | null {
   if (!data) return null
   const status = String(data.commercialStatus ?? '')
   if (!['trial', 'active'].includes(status)) return null

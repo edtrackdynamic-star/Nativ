@@ -3,12 +3,13 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https'
 import type { ActorContext, CapabilityId } from '../../src/domain/access'
 import type { AiPriority, AssignmentStudent } from '../../src/domain/assignmentEngine'
 import { runDeterministicAssignment } from '../../src/domain/assignmentEngine'
-import type { Course } from '../../src/domain/catalog'
+import type { Course, CycleCatalogSnapshot } from '../../src/domain/catalog'
 import type { AssignmentCycle } from '../../src/domain/cycle'
 import type { PreferenceSubmission } from '../../src/domain/preferences'
 import type { AiEvaluation, AppealImpactAnalysis, AppealRecord, NotificationRecord, WorkflowState } from '../../src/domain/workflow'
 import { redactDirectIdentifiers } from '../../src/integrations/ai/privacy'
-import { courseCatalogDocumentPath, cycleDocumentPath, organizationCollectionPath, workflowDocumentPath } from '../../server/firestore/paths'
+import { catalogSnapshotDocumentPath, courseCatalogDocumentPath, cycleDocumentPath, organizationCollectionPath, workflowDocumentPath } from '../../server/firestore/paths'
+import type { MailJob } from '../../server/mail/delivery'
 import { callableOptions, nativFirestore as firestore } from './firebase'
 import { actorFromRequest, inputRecord, requiredInteger, requiredString } from './request'
 
@@ -44,19 +45,36 @@ function latestSubmitted(submissions: PreferenceSubmission[]): PreferenceSubmiss
   return [...latest.values()]
 }
 
+async function notificationStatuses(organizationId: string, notifications: NotificationRecord[]): Promise<NotificationRecord[]> {
+  const emails = notifications.filter((entry) => entry.channel === 'email' && entry.deliveryEventId)
+  const paths = [...new Set(emails.flatMap((entry) => [`organizations/${organizationId}/mailStatuses/${entry.id}`, `organizations/${organizationId}/mailEvents/${entry.deliveryEventId}`]))]
+  const values = new Map<string, string>()
+  for (let offset = 0; offset < paths.length; offset += 100) {
+    const snapshots = await firestore.getAll(...paths.slice(offset, offset + 100).map((path) => firestore.doc(path)))
+    snapshots.forEach((snapshot) => values.set(snapshot.ref.path, String(snapshot.data()?.status ?? 'queued')))
+  }
+  return notifications.map((entry) => {
+    if (entry.channel !== 'email' || !entry.deliveryEventId) return entry
+    const status = values.get(`organizations/${organizationId}/mailStatuses/${entry.id}`)
+    const eventStatus = values.get(`organizations/${organizationId}/mailEvents/${entry.deliveryEventId}`)
+    const resolved = status === 'sent' || status === 'failed' || status === 'delivery_unknown' ? status : eventStatus === 'failed' ? 'failed' : 'queued'
+    return { ...entry, status: resolved }
+  })
+}
+
 export const getWorkflow = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request, 'read')
   const cycleId = requiredString(inputRecord(request.data), 'cycleId')
   const snapshot = await workflowRef(actor, cycleId).get()
   const workflow = snapshot.exists ? snapshot.data() as WorkflowState : emptyWorkflow(actor, cycleId, new Date().toISOString())
   if (actor.roles.includes('student')) {
-    return { ...workflow, aiEvaluations: [], assignmentRun: workflow.assignmentRun ? { ...workflow.assignmentRun, assignments: workflow.assignmentRun.assignments.filter((entry) => entry.studentId === actor.uid), tieBreaks: [] } : undefined, appeals: workflow.appeals.filter((entry) => entry.studentId === actor.uid), notifications: workflow.notifications.filter((entry) => entry.recipientRef === actor.uid) }
+    return { ...workflow, history: [], aiEvaluations: [], assignmentRun: workflow.assignmentRun ? { ...workflow.assignmentRun, assignments: workflow.assignmentRun.assignments.filter((entry) => entry.studentId === actor.uid), tieBreaks: [] } : undefined, appeals: workflow.appeals.filter((entry) => entry.studentId === actor.uid), notifications: await notificationStatuses(actor.organizationId, workflow.notifications.filter((entry) => entry.recipientRef === actor.uid)) }
   }
   if (actor.roles.includes('secretary')) {
-    return { ...workflow, aiEvaluations: [], assignmentRun: undefined, appeals: [], notifications: workflow.notifications.filter((entry) => entry.audience === 'secretary') }
+    return { ...workflow, history: [], aiEvaluations: [], assignmentRun: undefined, appeals: [], notifications: await notificationStatuses(actor.organizationId, workflow.notifications.filter((entry) => entry.audience === 'secretary')) }
   }
   requireCapability(actor, 'nativ.assignment.view')
-  return workflow
+  return { ...workflow, notifications: await notificationStatuses(actor.organizationId, workflow.notifications) }
 })
 
 export const generateAiEvaluations = onCall(callableOptions, async (request) => {
@@ -159,15 +177,27 @@ export const publishAssignments = onCall(callableOptions, async (request) => {
   return firestore.runTransaction(async (transaction) => {
     const cycleReference = firestore.doc(cycleDocumentPath(actor.organizationId, cycleId))
     const workflowReference = workflowRef(actor, cycleId)
-    const [cycleSnapshot, workflowSnapshot] = await transaction.getAll(cycleReference, workflowReference)
+    const [cycleSnapshot, workflowSnapshot, catalogSnapshot] = await transaction.getAll(cycleReference, workflowReference, firestore.doc(catalogSnapshotDocumentPath(actor.organizationId, cycleId)))
     const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
     const workflow = workflowSnapshot.data() as WorkflowState | undefined
     if (cycle?.status !== 'assignment' || !workflow?.assignmentRun?.approvedAt) throw new HttpsError('failed-precondition', 'יש לאשר גרסת שיבוץ לפני הפרסום')
-    const notifications: NotificationRecord[] = workflow.assignmentRun.assignments.flatMap((assignment) => ['in_app', 'email'].map((channel) => ({ id: randomUUID(), audience: 'student' as const, recipientRef: assignment.studentId, channel: channel as 'in_app' | 'email', subject: 'השיבוץ שלך פורסם', body: `השיבוץ במקבץ ${assignment.clusterId}: ${assignment.courseId}`, status: 'queued_mock' as const, createdAt: now })))
+    const catalog = catalogSnapshot.data() as CycleCatalogSnapshot | undefined
+    const eventId = `publication-${workflow.assignmentRun.id}`
+    const jobs: MailJob[] = []
+    const notifications: NotificationRecord[] = workflow.assignmentRun.assignments.flatMap((assignment) => {
+      const cluster = catalog?.clusters.find((entry) => entry.clusterId === assignment.clusterId)
+      const course = cluster?.courses.find((entry) => entry.courseId === assignment.courseId)
+      if (!cluster || !course) throw new HttpsError('failed-precondition', 'חסרים פרטי קורס; יש להשלים את הקטלוג לפני הפרסום')
+      const notificationId = randomUUID()
+      jobs.push({ notificationId, audience: 'student', studentId: assignment.studentId, clusterLabel: cluster.label, afterCourseLabel: course.label, occurredAt: now })
+      const common = { audience: 'student' as const, recipientRef: assignment.studentId, subject: 'השיבוץ שלך פורסם', body: `השיבוץ במקבץ ${cluster.label}: ${course.label}`, createdAt: now }
+      return [{ ...common, id: randomUUID(), channel: 'in_app' as const, status: 'available' as const }, { ...common, id: notificationId, channel: 'email' as const, status: 'queued' as const, deliveryEventId: eventId }]
+    })
     const nextWorkflow: WorkflowState = { ...workflow, assignmentRun: { ...workflow.assignmentRun, publishedAt: now }, notifications: [...workflow.notifications, ...notifications], version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'assignment.published', 'פרסום נפרד של גרסת השיבוץ המאושרת', now) }
     const nextCycle = { ...cycle, status: 'published' as const, publishedAt: now, version: cycle.version + 1, updatedAt: now, updatedBy: actor.uid }
     transaction.set(workflowReference, nextWorkflow)
     transaction.set(cycleReference, nextCycle)
+    transaction.create(firestore.doc(`organizations/${actor.organizationId}/mailEvents/${eventId}`), { organizationId: actor.organizationId, cycleId, jobs, status: 'queued', attempts: 0, createdAt: now, createdBy: actor.uid })
     return nextWorkflow
   })
 })
@@ -257,7 +287,7 @@ export const executeAppealChange = onCall(callableOptions, async (request) => {
   const cycleId = requiredString(data, 'cycleId')
   const appealId = requiredString(data, 'appealId')
   const expectedWorkflowVersion = requiredInteger(data, 'expectedWorkflowVersion')
-  const coursesSnapshot = await firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId)).get()
+  const [coursesSnapshot, catalogSnapshot] = await Promise.all([firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId)).get(), firestore.doc(catalogSnapshotDocumentPath(actor.organizationId, cycleId)).get()])
   const courses = (coursesSnapshot.data()?.courses ?? []) as Course[]
   const now = new Date().toISOString()
   return firestore.runTransaction(async (transaction) => {
@@ -272,13 +302,23 @@ export const executeAppealChange = onCall(callableOptions, async (request) => {
     const previous = workflow.assignmentRun.assignments.find((entry) => entry.studentId === appeal.studentId && entry.clusterId === appeal.clusterId)!
     const assignments = workflow.assignmentRun.assignments.map((entry) => entry === previous ? { ...entry, courseId: appeal.requestedCourseId, source: 'hard_constraint' as const, explanation: `שינוי לאחר ערעור ${appeal.id}` } : entry)
     const counts = { ...workflow.assignmentRun.enrollmentByCourse, [previous.courseId]: workflow.assignmentRun.enrollmentByCourse[previous.courseId] - 1, [appeal.requestedCourseId]: (workflow.assignmentRun.enrollmentByCourse[appeal.requestedCourseId] ?? 0) + 1 }
+    const cluster = (catalogSnapshot.data() as CycleCatalogSnapshot | undefined)?.clusters.find((entry) => entry.clusterId === appeal.clusterId)
+    const beforeCourse = courses.find((entry) => entry.id === previous.courseId)
+    const afterCourse = courses.find((entry) => entry.id === appeal.requestedCourseId)
+    if (!cluster || !beforeCourse || !afterCourse) throw new HttpsError('failed-precondition', 'חסרים פרטי קורס; יש להשלים את הקטלוג לפני ביצוע השינוי')
+    const eventId = `appeal-${appeal.id}`
+    const secretaryMailId = randomUUID(); const studentMailId = randomUUID()
     const notifications: NotificationRecord[] = [
-      { id: randomUUID(), audience: 'secretary', recipientRef: 'school-secretary', channel: 'in_app', subject: 'שינוי שיבוץ לאחר ערעור', body: `${appeal.studentId}: ${previous.courseId} ← ${appeal.requestedCourseId}`, status: 'queued_mock', createdAt: now },
-      { id: randomUUID(), audience: 'secretary', recipientRef: 'school-secretary', channel: 'email', subject: 'שינוי שיבוץ לאחר ערעור', body: `${appeal.studentId}: ${previous.courseId} ← ${appeal.requestedCourseId}`, status: 'queued_mock', createdAt: now },
-      { id: randomUUID(), audience: 'student', recipientRef: appeal.studentId, channel: 'in_app', subject: 'הערעור בוצע', body: `השיבוץ עודכן ל-${appeal.requestedCourseId}`, status: 'queued_mock', createdAt: now },
+      { id: randomUUID(), audience: 'secretary', recipientRef: 'school-secretary', channel: 'in_app', subject: 'שינוי שיבוץ לאחר ערעור', body: `${appeal.studentId}: ${beforeCourse.label} ← ${afterCourse.label}`, status: 'available', createdAt: now },
+      { id: secretaryMailId, audience: 'secretary', recipientRef: 'school-secretary', channel: 'email', subject: 'שינוי שיבוץ לאחר ערעור', body: `${appeal.studentId}: ${beforeCourse.label} ← ${afterCourse.label}`, status: 'queued', deliveryEventId: eventId, createdAt: now },
+      { id: randomUUID(), audience: 'student', recipientRef: appeal.studentId, channel: 'in_app', subject: 'הערעור בוצע', body: `השיבוץ עודכן ל-${afterCourse.label}`, status: 'available', createdAt: now },
+      { id: studentMailId, audience: 'student', recipientRef: appeal.studentId, channel: 'email', subject: 'השיבוץ שלך עודכן', body: `השיבוץ עודכן ל-${afterCourse.label}`, status: 'queued', deliveryEventId: eventId, createdAt: now },
     ]
+    const commonJob = { studentId: appeal.studentId, clusterLabel: cluster.label, afterCourseLabel: afterCourse.label, occurredAt: now }
+    const jobs: MailJob[] = [{ ...commonJob, notificationId: secretaryMailId, audience: 'secretary', beforeCourseLabel: beforeCourse.label }, { ...commonJob, notificationId: studentMailId, audience: 'student' }]
     const next: WorkflowState = { ...workflow, assignmentRun: { ...workflow.assignmentRun, assignments, enrollmentByCourse: counts }, appeals: workflow.appeals.map((entry) => entry.id === appealId ? { ...entry, analysis: fresh, status: 'executed', executedAt: now, executedBy: actor.uid } : entry), notifications: [...workflow.notifications, ...notifications], version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'appeal.change.executed', `השיבוץ שונה מ-${previous.courseId} ל-${appeal.requestedCourseId} לאחר בדיקה חוזרת`, now) }
     transaction.set(reference, next)
+    transaction.create(firestore.doc(`organizations/${actor.organizationId}/mailEvents/${eventId}`), { organizationId: actor.organizationId, cycleId, jobs, status: 'queued', attempts: 0, createdAt: now, createdBy: actor.uid })
     return next
   })
 })

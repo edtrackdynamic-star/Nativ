@@ -68,7 +68,8 @@ export interface NotificationRecord {
   channel: 'in_app' | 'email'
   subject: string
   body: string
-  status: 'queued_mock'
+  status: 'queued_mock' | 'available' | 'queued' | 'sent' | 'failed' | 'delivery_unknown'
+  deliveryEventId?: string
   createdAt: string
 }
 
