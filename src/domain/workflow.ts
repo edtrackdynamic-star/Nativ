@@ -51,11 +51,13 @@ export interface AppealRecord {
   createdAt: string
   status: 'submitted' | 'approved_pending_execution' | 'rejected' | 'executed'
   originalPreference?: ClusterPreference
-  originalSubmission?: { preferences: ClusterPreference[]; submittedAt?: string }
+  originalSubmission?: { preferences: ClusterPreference[]; catalogSnapshot?: Array<{ clusterId: string; label: string; courses: Array<{ courseId: string; label: string }> }>; submittedAt?: string; submissionVersion?: number }
   sourceSubmissionId?: string
   sourceSubmissionVersion?: number
   aiEvaluationId?: string
   analysis?: AppealImpactAnalysis
+  recommendation?: { outcome: 'approve' | 'reject' | 'more_information'; reason: string; recommendedAt: string; recommendedBy: string }
+  capacityOverride?: { approvedAt: string; approvedBy: string; reason: string; baseWorkflowVersion: number }
   decision?: { outcome: 'approved' | 'rejected'; reason: string; decidedAt: string; decidedBy: string }
   executedAt?: string
   executedBy?: string

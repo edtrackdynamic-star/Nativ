@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
+import { getAuth } from 'firebase-admin/auth'
 import type { ActorContext, CapabilityId } from '../../src/domain/access'
 import type { AiPriority, AssignmentStudent } from '../../src/domain/assignmentEngine'
 import { runDeterministicAssignment } from '../../src/domain/assignmentEngine'
@@ -10,7 +11,7 @@ import type { AiEvaluation, AppealImpactAnalysis, AppealRecord, NotificationReco
 import { redactDirectIdentifiers } from '../../src/integrations/ai/privacy'
 import { catalogSnapshotDocumentPath, courseCatalogDocumentPath, cycleDocumentPath, organizationCollectionPath, workflowDocumentPath } from '../../server/firestore/paths'
 import type { MailJob } from '../../server/mail/delivery'
-import { callableOptions, nativFirestore as firestore } from './firebase'
+import { callableOptions, coreFirestore, nativFirestore as firestore } from './firebase'
 import { actorFromRequest, inputRecord, requiredInteger, requiredString } from './request'
 
 function requireCapability(actor: ActorContext, capability: CapabilityId) {
@@ -27,6 +28,18 @@ function emptyWorkflow(actor: ActorContext, cycleId: string, now: string): Workf
 
 function history(current: WorkflowState, actor: ActorContext, action: string, reason: string, now: string) {
   return [...(current.history ?? []), { id: randomUUID(), action, actorId: actor.uid, occurredAt: now, reason, workflowVersion: current.version + 1 }]
+}
+
+async function studentDisplayLabels(organizationId: string, studentIds: string[]): Promise<Map<string, string>> {
+  const uniqueIds = [...new Set(studentIds)]
+  if (process.env.FUNCTIONS_EMULATOR === 'true') {
+    return new Map(await Promise.all(uniqueIds.map(async (uid) => {
+      try { const user = await getAuth().getUser(uid); return [uid, user.displayName || user.email || 'תלמיד'] as const }
+      catch { return [uid, 'תלמיד'] as const }
+    })))
+  }
+  const snapshots = await coreFirestore.getAll(...uniqueIds.map((uid) => coreFirestore.doc(`organizations/${organizationId}/members/${uid}`)))
+  return new Map(snapshots.map((snapshot) => [snapshot.id, String(snapshot.data()?.fullName ?? 'תלמיד')]))
 }
 
 function mockEvaluation(rationale: string | undefined): { priority: AiPriority; summary: string } {
@@ -64,17 +77,35 @@ async function notificationStatuses(organizationId: string, notifications: Notif
 
 export const getWorkflow = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request, 'read')
-  const cycleId = requiredString(inputRecord(request.data), 'cycleId')
-  const snapshot = await workflowRef(actor, cycleId).get()
+  const data = inputRecord(request.data)
+  const cycleId = requiredString(data, 'cycleId')
+  const requestedView = typeof data.view === 'string' ? data.view : undefined
+  const [snapshot, cycleSnapshot] = await Promise.all([
+    workflowRef(actor, cycleId).get(),
+    firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)).get(),
+  ])
   const workflow = snapshot.exists ? snapshot.data() as WorkflowState : emptyWorkflow(actor, cycleId, new Date().toISOString())
-  if (actor.roles.includes('student')) {
-    return { ...workflow, history: [], aiEvaluations: [], assignmentRun: workflow.assignmentRun ? { ...workflow.assignmentRun, assignments: workflow.assignmentRun.assignments.filter((entry) => entry.studentId === actor.uid), tieBreaks: [] } : undefined, appeals: workflow.appeals.filter((entry) => entry.studentId === actor.uid), notifications: await notificationStatuses(actor.organizationId, workflow.notifications.filter((entry) => entry.recipientRef === actor.uid)) }
+  if (requestedView === 'coordinator' || (!requestedView && actor.capabilities.includes('nativ.assignment.manage'))) {
+    requireCapability(actor, 'nativ.assignment.manage')
+    return { ...workflow, notifications: await notificationStatuses(actor.organizationId, workflow.notifications) }
   }
-  if (actor.roles.includes('secretary')) {
+  if (requestedView === 'appeal_reviewer' || (!requestedView && actor.roles.includes('appeal_reviewer'))) {
+    if (!actor.roles.includes('appeal_reviewer')) throw new HttpsError('permission-denied', 'אין הרשאה לצפייה בערעורים')
+    return { ...workflow, history: [], aiEvaluations: [], assignmentRun: undefined, notifications: [], appeals: workflow.appeals }
+  }
+  if (requestedView === 'secretary' || (!requestedView && actor.roles.includes('secretary'))) {
+    if (!actor.roles.includes('secretary')) throw new HttpsError('permission-denied', 'אין הרשאת מזכירות')
     return { ...workflow, history: [], aiEvaluations: [], assignmentRun: undefined, appeals: [], notifications: await notificationStatuses(actor.organizationId, workflow.notifications.filter((entry) => entry.audience === 'secretary')) }
   }
+  if (requestedView === 'student' || (!requestedView && actor.roles.includes('student'))) {
+    if (!actor.roles.includes('student')) throw new HttpsError('permission-denied', 'אין הרשאת תלמיד')
+    const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
+    const isPublished = Boolean(workflow.assignmentRun?.publishedAt) && Boolean(cycle && ['published', 'appeals', 'closed'].includes(cycle.status))
+    const assignmentRun = isPublished && workflow.assignmentRun ? { ...workflow.assignmentRun, executedBy: '', approvedBy: undefined, enrollmentByCourse: {}, warnings: [], tieBreaks: [], assignments: workflow.assignmentRun.assignments.filter((entry) => entry.studentId === actor.uid) } : undefined
+    return { ...workflow, history: [], aiEvaluations: [], assignmentRun, appeals: workflow.appeals.filter((entry) => entry.studentId === actor.uid), notifications: await notificationStatuses(actor.organizationId, workflow.notifications.filter((entry) => entry.recipientRef === actor.uid)) }
+  }
   requireCapability(actor, 'nativ.assignment.view')
-  return { ...workflow, notifications: await notificationStatuses(actor.organizationId, workflow.notifications) }
+  return { ...workflow, history: [], aiEvaluations: [], assignmentRun: undefined, appeals: [], notifications: [] }
 })
 
 export const generateAiEvaluations = onCall(callableOptions, async (request) => {
@@ -87,7 +118,9 @@ export const generateAiEvaluations = onCall(callableOptions, async (request) => 
   ])
   const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
   if (!cycle || !['choice_closed', 'assignment'].includes(cycle.status)) throw new HttpsError('failed-precondition', 'יש לסגור את הבחירה לפני הערכת AI')
+  if (process.env.FUNCTIONS_EMULATOR !== 'true') throw new HttpsError('failed-precondition', 'הערכת AI טרם הופעלה במערכת זו')
   const submissions = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission))
+  if (!submissions.length) throw new HttpsError('failed-precondition', 'אין הגשות סופיות להערכה')
   const now = new Date().toISOString()
   return firestore.runTransaction(async (transaction) => {
     const reference = workflowRef(actor, cycleId)
@@ -145,12 +178,23 @@ export const runAssignment = onCall(callableOptions, async (request) => {
   if (!workflow || !workflow.aiEvaluations.length || workflow.aiEvaluations.some((evaluation) => !evaluation.approved)) throw new HttpsError('failed-precondition', 'יש לאשר את כל פלטי ה-AI לפני השיבוץ')
   const courses = (catalogSnapshot.data()?.courses ?? []) as Course[]
   const submissions = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission))
-  const students: AssignmentStudent[] = submissions.map((submission) => ({ studentId: submission.studentId, displayLabel: submission.studentId, submission, approvedAiByCluster: Object.fromEntries(workflow.aiEvaluations.filter((evaluation) => evaluation.studentId === submission.studentId && evaluation.approved).map((evaluation) => [evaluation.clusterId, evaluation.approved!.priority])) }))
-  const result = runDeterministicAssignment({ cycleId, clusterIds: [...new Set(courses.map((course) => course.clusterId))], courses, students })
+  const labels = await studentDisplayLabels(actor.organizationId, submissions.map((submission) => submission.studentId))
+  const students: AssignmentStudent[] = submissions.map((submission) => ({ studentId: submission.studentId, displayLabel: labels.get(submission.studentId) ?? 'תלמיד', submission, approvedAiByCluster: Object.fromEntries(workflow.aiEvaluations.filter((evaluation) => evaluation.studentId === submission.studentId && evaluation.approved).map((evaluation) => [evaluation.clusterId, evaluation.approved!.priority])) }))
+  const calculated = runDeterministicAssignment({ cycleId, clusterIds: [...new Set(courses.map((course) => course.clusterId))], courses, students })
+  const result = { ...calculated, assignments: calculated.assignments.map((assignment) => ({ ...assignment, studentLabel: labels.get(assignment.studentId) ?? 'תלמיד' })) }
   const now = new Date().toISOString()
-  const next: WorkflowState = { ...workflow, assignmentRun: { id: randomUUID(), executedAt: now, executedBy: actor.uid, algorithmVersion: 'legacy-compatible-1.0.0', seed: 42, ...result }, version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'assignment.run.executed', 'הרצת מנוע שיבוץ דטרמיניסטי על פלטי AI מאושרים', now) }
-  await workflowRef(actor, cycleId).set(next)
-  return next
+  return firestore.runTransaction(async (transaction) => {
+    const reference = workflowRef(actor, cycleId)
+    const [currentSnapshot, currentCycleSnapshot] = await transaction.getAll(reference, firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)))
+    const current = currentSnapshot.data() as WorkflowState | undefined
+    const currentCycle = currentCycleSnapshot.data() as AssignmentCycle | undefined
+    if (!current || current.version !== workflow.version) throw new HttpsError('aborted', 'המידע השתנה; יש לרענן ולהריץ שוב')
+    if (currentCycle?.status !== 'assignment') throw new HttpsError('failed-precondition', 'המחזור אינו במצב שיבוץ')
+    if (current.assignmentRun) throw new HttpsError('already-exists', 'כבר קיימת הרצת שיבוץ; יש לפתוח הרצה חדשה באופן מפורש')
+    const next: WorkflowState = { ...current, assignmentRun: { id: randomUUID(), executedAt: now, executedBy: actor.uid, algorithmVersion: 'legacy-compatible-1.0.0', seed: 42, ...result }, version: current.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(current, actor, 'assignment.run.executed', 'הרצת שיבוץ', now) }
+    transaction.set(reference, next)
+    return next
+  })
 })
 
 export const approveAssignmentRun = onCall(callableOptions, async (request) => {
@@ -160,9 +204,11 @@ export const approveAssignmentRun = onCall(callableOptions, async (request) => {
   const now = new Date().toISOString()
   return firestore.runTransaction(async (transaction) => {
     const reference = workflowRef(actor, cycleId)
-    const snapshot = await transaction.get(reference)
+    const [snapshot, cycleSnapshot] = await transaction.getAll(reference, firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)))
     const workflow = snapshot.data() as WorkflowState | undefined
-    if (!workflow?.assignmentRun) throw new HttpsError('failed-precondition', 'אין תוצאת שיבוץ לאישור')
+    const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
+    if (cycle?.status !== 'assignment' || !workflow?.assignmentRun || workflow.assignmentRun.publishedAt) throw new HttpsError('failed-precondition', 'אין תוצאת שיבוץ פעילה לאישור')
+    if (workflow.assignmentRun.approvedAt) throw new HttpsError('already-exists', 'גרסת השיבוץ כבר אושרה')
     const next: WorkflowState = { ...workflow, assignmentRun: { ...workflow.assignmentRun, approvedAt: now, approvedBy: actor.uid }, version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'assignment.run.approved', 'אישור מפורש של גרסת השיבוץ לפני פרסום', now) }
     transaction.set(reference, next)
     return next
@@ -206,9 +252,16 @@ function analyze(current: WorkflowState, appeal: AppealRecord, courses: Course[]
   const before = current.assignmentRun?.assignments.find((entry) => entry.studentId === appeal.studentId && entry.clusterId === appeal.clusterId)
   const requested = courses.find((course) => course.id === appeal.requestedCourseId)
   if (!before || !requested) throw new HttpsError('failed-precondition', 'לא ניתן לנתח את השינוי המבוקש')
+  if (requested.clusterId !== appeal.clusterId) throw new HttpsError('failed-precondition', 'הקורס המבוקש אינו שייך למקבץ הערעור')
+  if (before.courseId === requested.id) throw new HttpsError('failed-precondition', 'הקורס המבוקש כבר משובץ לתלמיד במקבץ זה')
   const counts = current.assignmentRun?.enrollmentByCourse ?? {}
   const afterCount = (counts[requested.id] ?? 0) + 1
-  return { analyzedAt: now, baseWorkflowVersion: current.version + 1, beforeCourseId: before.courseId, afterCourseId: requested.id, capacityBefore: { current: counts[before.courseId] ?? 0, maximum: courses.find((course) => course.id === before.courseId)?.capacity.maximum ?? 0 }, capacityAfter: { current: afterCount, maximum: requested.capacity.maximum }, createsDuplicateCourse: false, constraintViolations: afterCount > requested.capacity.maximum ? ['חריגה מהקיבולת המרבית; נדרש אישור נוסף'] : [], requiresMovingAnotherStudent: afterCount > requested.capacity.maximum, affectedOutputs: ['רשימת תלמידים לקורס הנוכחי', 'רשימת תלמידים לקורס החדש', 'דוח שיבוץ תלמיד', 'דוח שינויים למזכירות'] }
+  const createsDuplicateCourse = current.assignmentRun!.assignments.some((entry) => entry.studentId === appeal.studentId && entry.clusterId !== appeal.clusterId && courses.find((course) => course.id === entry.courseId)?.logicalCourseId === requested.logicalCourseId)
+  const constraintViolations = [
+    ...(afterCount > requested.capacity.maximum ? ['חריגה מהקיבולת המרבית; נדרש אישור נוסף'] : []),
+    ...(createsDuplicateCourse && requested.repeatPolicy === 'prohibited' ? ['מדיניות הקורס אינה מאפשרת חזרה על הקורס'] : []),
+  ]
+  return { analyzedAt: now, baseWorkflowVersion: current.version + 1, beforeCourseId: before.courseId, afterCourseId: requested.id, capacityBefore: { current: counts[before.courseId] ?? 0, maximum: courses.find((course) => course.id === before.courseId)?.capacity.maximum ?? 0 }, capacityAfter: { current: afterCount, maximum: requested.capacity.maximum }, createsDuplicateCourse, constraintViolations, requiresMovingAnotherStudent: afterCount > requested.capacity.maximum, affectedOutputs: ['רשימת תלמידים בקורס הנוכחי', 'רשימת תלמידים בקורס החדש', 'דוח השיבוץ של התלמיד', 'דוח שינויים למזכירות'] }
 }
 
 export const submitAppeal = onCall(callableOptions, async (request) => {
@@ -219,17 +272,20 @@ export const submitAppeal = onCall(callableOptions, async (request) => {
   const clusterId = requiredString(data, 'clusterId')
   const requestedCourseId = requiredString(data, 'requestedCourseId')
   const reason = requiredString(data, 'reason')
-  const [cycleSnapshot, submissionsSnapshot] = await Promise.all([firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)).get(), firestore.collection(organizationCollectionPath(actor.organizationId, 'submissions')).where('cycleId', '==', cycleId).where('studentId', '==', actor.uid).get()])
+  const [cycleSnapshot, submissionsSnapshot, coursesSnapshot] = await Promise.all([firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)).get(), firestore.collection(organizationCollectionPath(actor.organizationId, 'submissions')).where('cycleId', '==', cycleId).where('studentId', '==', actor.uid).get(), firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId)).get()])
   const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
   if (cycle?.status !== 'appeals') throw new HttpsError('failed-precondition', 'חלון הערעורים אינו פתוח')
+  const requestedCourse = ((coursesSnapshot.data()?.courses ?? []) as Course[]).find((course) => course.id === requestedCourseId)
+  if (!requestedCourse?.published || requestedCourse.clusterId !== clusterId) throw new HttpsError('failed-precondition', 'הקורס המבוקש אינו זמין במקבץ שנבחר')
   const original = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission))[0]
   const now = new Date().toISOString()
   return firestore.runTransaction(async (transaction) => {
     const reference = workflowRef(actor, cycleId)
     const snapshot = await transaction.get(reference)
     const workflow = snapshot.data() as WorkflowState
+    if (!workflow.assignmentRun?.publishedAt || !workflow.assignmentRun.assignments.some((entry) => entry.studentId === actor.uid && entry.clusterId === clusterId)) throw new HttpsError('failed-precondition', 'לא נמצא שיבוץ שפורסם במקבץ זה')
     if (workflow.appeals.some((appeal) => appeal.studentId === actor.uid && appeal.clusterId === clusterId && !['rejected', 'executed'].includes(appeal.status))) throw new HttpsError('already-exists', 'כבר קיים ערעור פעיל במקבץ זה')
-    const appeal: AppealRecord = { id: randomUUID(), studentId: actor.uid, clusterId, requestedCourseId, reason, createdAt: now, status: 'submitted', originalPreference: original?.preferences.find((entry) => entry.clusterId === clusterId), originalSubmission: original ? { preferences: original.preferences, submittedAt: original.submittedAt } : undefined, sourceSubmissionId: original?.id, sourceSubmissionVersion: original?.submissionVersion, aiEvaluationId: workflow.aiEvaluations.find((entry) => entry.studentId === actor.uid && entry.clusterId === clusterId)?.id }
+    const appeal: AppealRecord = { id: randomUUID(), studentId: actor.uid, clusterId, requestedCourseId, reason, createdAt: now, status: 'submitted', originalPreference: original?.preferences.find((entry) => entry.clusterId === clusterId), originalSubmission: original ? { preferences: original.preferences, catalogSnapshot: original.catalogSnapshot, submittedAt: original.submittedAt, submissionVersion: original.submissionVersion } : undefined, sourceSubmissionId: original?.id, sourceSubmissionVersion: original?.submissionVersion, aiEvaluationId: workflow.aiEvaluations.find((entry) => entry.studentId === actor.uid && entry.clusterId === clusterId)?.id }
     const next = { ...workflow, appeals: [...workflow.appeals, appeal], version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'appeal.submitted', reason, now) }
     transaction.set(reference, next)
     return appeal
@@ -258,6 +314,29 @@ export const analyzeAppeal = onCall(callableOptions, async (request) => {
   })
 })
 
+export const recommendAppeal = onCall(callableOptions, async (request) => {
+  const actor = await actorFromRequest(request)
+  requireCapability(actor, 'nativ.appeal.review')
+  const data = inputRecord(request.data)
+  const cycleId = requiredString(data, 'cycleId')
+  const appealId = requiredString(data, 'appealId')
+  const outcome = requiredString(data, 'outcome') as 'approve' | 'reject' | 'more_information'
+  if (!['approve', 'reject', 'more_information'].includes(outcome)) throw new HttpsError('invalid-argument', 'ההמלצה אינה תקינה')
+  const reason = requiredString(data, 'reason')
+  const now = new Date().toISOString()
+  return firestore.runTransaction(async (transaction) => {
+    const reference = workflowRef(actor, cycleId)
+    const snapshot = await transaction.get(reference)
+    const workflow = snapshot.data() as WorkflowState
+    const appeal = workflow.appeals.find((entry) => entry.id === appealId)
+    if (appeal?.status !== 'submitted') throw new HttpsError('failed-precondition', 'ניתן להמליץ רק בערעור שממתין להחלטה')
+    const nextVersion = workflow.version + 1
+    const next = { ...workflow, appeals: workflow.appeals.map((entry) => entry.id === appealId ? { ...entry, analysis: entry.analysis ? { ...entry.analysis, baseWorkflowVersion: nextVersion } : undefined, recommendation: { outcome, reason, recommendedAt: now, recommendedBy: actor.uid } } : entry), version: nextVersion, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'appeal.recommended', reason, now) }
+    transaction.set(reference, next)
+    return next
+  })
+})
+
 export const decideAppeal = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.appeal.decide')
@@ -273,8 +352,30 @@ export const decideAppeal = onCall(callableOptions, async (request) => {
     const snapshot = await transaction.get(reference)
     const workflow = snapshot.data() as WorkflowState
     const appeal = workflow.appeals.find((entry) => entry.id === appealId)
-    if (!appeal?.analysis) throw new HttpsError('failed-precondition', 'נדרש ניתוח השפעה לפני החלטה')
+    if (appeal?.status !== 'submitted' || !appeal.analysis) throw new HttpsError('failed-precondition', 'נדרש ערעור פתוח עם ניתוח השפעה לפני החלטה')
+    if (appeal.analysis.baseWorkflowVersion !== workflow.version) throw new HttpsError('aborted', 'המידע השתנה; יש לבצע ניתוח השפעה מחדש')
     const next = { ...workflow, appeals: workflow.appeals.map((entry) => entry.id === appealId ? { ...entry, status: outcome === 'approved' ? 'approved_pending_execution' as const : 'rejected' as const, decision: { outcome, reason, decidedAt: now, decidedBy: actor.uid } } : entry), version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, `appeal.${outcome}`, reason, now) }
+    transaction.set(reference, next)
+    return next
+  })
+})
+
+export const approveCapacityOverride = onCall(callableOptions, async (request) => {
+  const actor = await actorFromRequest(request)
+  requireCapability(actor, 'nativ.capacity.override.approve')
+  const data = inputRecord(request.data)
+  const cycleId = requiredString(data, 'cycleId')
+  const appealId = requiredString(data, 'appealId')
+  const reason = requiredString(data, 'reason')
+  const now = new Date().toISOString()
+  return firestore.runTransaction(async (transaction) => {
+    const reference = workflowRef(actor, cycleId)
+    const snapshot = await transaction.get(reference)
+    const workflow = snapshot.data() as WorkflowState
+    const appeal = workflow.appeals.find((entry) => entry.id === appealId)
+    if (appeal?.status !== 'approved_pending_execution' || !appeal.analysis?.requiresMovingAnotherStudent) throw new HttpsError('failed-precondition', 'הערעור אינו ממתין לאישור חריגת קיבולת')
+    const nextVersion = workflow.version + 1
+    const next = { ...workflow, appeals: workflow.appeals.map((entry) => entry.id === appealId ? { ...entry, analysis: { ...entry.analysis!, baseWorkflowVersion: nextVersion }, capacityOverride: { approvedAt: now, approvedBy: actor.uid, reason, baseWorkflowVersion: nextVersion } } : entry), version: nextVersion, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'appeal.capacity_override.approved', reason, now) }
     transaction.set(reference, next)
     return next
   })
@@ -298,7 +399,12 @@ export const executeAppealChange = onCall(callableOptions, async (request) => {
     const appeal = workflow.appeals.find((entry) => entry.id === appealId)
     if (appeal?.status !== 'approved_pending_execution' || !workflow.assignmentRun) throw new HttpsError('failed-precondition', 'השינוי אינו מאושר לביצוע')
     const fresh = analyze(workflow, appeal, courses, now)
-    if (fresh.constraintViolations.length) throw new HttpsError('failed-precondition', 'השינוי מפר אילוצים או קיבולת ודורש מסלול אישור נוסף', fresh)
+    const nonCapacityViolations = fresh.constraintViolations.filter((violation) => !violation.includes('קיבולת המרבית'))
+    if (nonCapacityViolations.length) throw new HttpsError('failed-precondition', 'השינוי מפר אילוץ שאינו ניתן לאישור במסלול זה', fresh)
+    if (fresh.requiresMovingAnotherStudent) {
+      if (!appeal.capacityOverride || appeal.capacityOverride.baseWorkflowVersion !== workflow.version) throw new HttpsError('failed-precondition', 'נדרש אישור חריגת קיבולת עדכני מרכז אחר')
+      if (appeal.capacityOverride.approvedBy === actor.uid) throw new HttpsError('failed-precondition', 'מבצע השינוי חייב להיות אדם אחר ממאשר חריגת הקיבולת')
+    }
     const previous = workflow.assignmentRun.assignments.find((entry) => entry.studentId === appeal.studentId && entry.clusterId === appeal.clusterId)!
     const assignments = workflow.assignmentRun.assignments.map((entry) => entry === previous ? { ...entry, courseId: appeal.requestedCourseId, source: 'hard_constraint' as const, explanation: `שינוי לאחר ערעור ${appeal.id}` } : entry)
     const counts = { ...workflow.assignmentRun.enrollmentByCourse, [previous.courseId]: workflow.assignmentRun.enrollmentByCourse[previous.courseId] - 1, [appeal.requestedCourseId]: (workflow.assignmentRun.enrollmentByCourse[appeal.requestedCourseId] ?? 0) + 1 }

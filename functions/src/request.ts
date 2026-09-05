@@ -78,7 +78,7 @@ export async function actorFromRequest(request: CallableRequest, operation: 'rea
   }
   const accessData = productAccess.data()
   const assignedRoles = accessData?.active === false ? [] : allowedValues<RoleId>(accessData?.roles, roleIds)
-  const roles = membershipData?.role === 'student' ? [...new Set<RoleId>(['student', ...assignedRoles])] : assignedRoles
+  const roles = membershipData?.role === 'student' && accessData?.active !== false ? [...new Set<RoleId>(['student', ...assignedRoles])] : assignedRoles
   const capabilities = [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))]
   return {
     uid: request.auth.uid,
@@ -94,7 +94,7 @@ export async function actorFromRequest(request: CallableRequest, operation: 'rea
 
 export const roleCapabilityMap: Record<RoleId, CapabilityId[]> = {
   access_manager: ['nativ.access.manage'],
-  placement_coordinator: ['nativ.assignment.view', 'nativ.assignment.manage', 'nativ.assignment.publish', 'nativ.ai.review', 'nativ.appeal.review', 'nativ.appeal.decide', 'nativ.audit.view'],
+  placement_coordinator: ['nativ.assignment.view', 'nativ.assignment.manage', 'nativ.assignment.publish', 'nativ.ai.review', 'nativ.appeal.review', 'nativ.appeal.decide', 'nativ.capacity.override.approve', 'nativ.audit.view'],
   appeal_reviewer: ['nativ.assignment.view', 'nativ.appeal.review'],
   secretary: [],
   course_instructor: [],

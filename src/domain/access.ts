@@ -8,6 +8,7 @@ export const accessRoles: AccessRole[] = [
   { id: 'placement_coordinator', label: 'רכז שיבוץ', symbol: 'ר', summary: 'צופה בנתונים, מאשר הערכות ומבצע שיבוץ ושינויים.' },
   { id: 'appeal_reviewer', label: 'צוות ערעורים', symbol: 'ע', summary: 'בוחן מידע וניתוח השפעה ומגיש המלצה מנומקת.' },
   { id: 'secretary', label: 'מזכירות', symbol: 'ז', summary: 'מקבלת תיעוד של שינויים מאושרים לצורך תפעולי.' },
+  { id: 'course_instructor', label: 'מנחה קורס', symbol: 'ק', summary: 'צופה בקורסים ובתלמידים המשויכים אליו בלבד.' },
 ]
 
 export const capabilityIds = ['nativ.access.manage', 'nativ.assignment.view', 'nativ.assignment.manage', 'nativ.assignment.publish', 'nativ.ai.review', 'nativ.appeal.review', 'nativ.appeal.decide', 'nativ.capacity.override.approve', 'nativ.audit.view'] as const

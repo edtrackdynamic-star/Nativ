@@ -118,6 +118,17 @@ describe('Nativ callable system flow', () => {
     workflow = (await run({ cycleId: demoCycle.id })).data
     expect(workflow.assignmentRun?.assignments).toHaveLength(2)
     expect(workflow.assignmentRun).toMatchObject({ algorithmVersion: 'legacy-compatible-1.0.0', seed: 42 })
+    await expect(transition({ cycleId: demoCycle.id, expectedVersion: 3, to: 'published', reason: 'ניסיון לעקוף אישור', idempotencyKey: 'system-publish-bypass-blocked' })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+
+    await signOut(auth)
+    const studentBeforePublication = accounts.find((account) => account.label === 'תלמיד')!
+    await signInWithEmailAndPassword(auth, studentBeforePublication.email, studentBeforePublication.password)
+    const getStudentWorkflow = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'getWorkflow')
+    const hiddenResult = (await getStudentWorkflow({ cycleId: demoCycle.id, view: 'student' })).data
+    expect(hiddenResult.assignmentRun).toBeFalsy()
+    await signOut(auth)
+    const coordinatorBeforePublication = accounts.find((account) => account.label === 'רכז שיבוץ')!
+    await signInWithEmailAndPassword(auth, coordinatorBeforePublication.email, coordinatorBeforePublication.password)
 
     const approveRun = httpsCallable<{ cycleId: string }, WorkflowState>(functions, 'approveAssignmentRun')
     workflow = (await approveRun({ cycleId: demoCycle.id })).data
@@ -141,6 +152,7 @@ describe('Nativ callable system flow', () => {
     const current = workflow.assignmentRun!.assignments.find((entry) => entry.clusterId === 'cluster-arts')!
     const requestedCourseId = current.courseId === 'course-theater' ? 'course-music' : 'course-theater'
     const submitAppeal = httpsCallable<Record<string, unknown>, { id: string }>(functions, 'submitAppeal')
+    await expect(submitAppeal({ cycleId: demoCycle.id, clusterId: 'cluster-arts', requestedCourseId: 'course-robotics', reason: 'קורס ממקבץ אחר' })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
     const appeal = (await submitAppeal({ cycleId: demoCycle.id, clusterId: 'cluster-arts', requestedCourseId, reason: 'בקשת בדיקת מערכת' })).data
 
     await signOut(auth)
@@ -151,6 +163,11 @@ describe('Nativ callable system flow', () => {
     const analyzed = workflow.appeals.find((entry) => entry.id === appeal.id)!
     expect(analyzed.analysis).toMatchObject({ beforeCourseId: current.courseId, afterCourseId: requestedCourseId, requiresMovingAnotherStudent: false })
     expect(analyzed.originalSubmission?.preferences).toHaveLength(2)
+    expect(analyzed.originalSubmission?.catalogSnapshot).toHaveLength(2)
+
+    const recommend = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'recommendAppeal')
+    workflow = (await recommend({ cycleId: demoCycle.id, appealId: appeal.id, outcome: 'approve', reason: 'המלצת צוות מנומקת' })).data
+    expect(workflow.appeals.find((entry) => entry.id === appeal.id)?.recommendation?.outcome).toBe('approve')
 
     const decide = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'decideAppeal')
     workflow = (await decide({ cycleId: demoCycle.id, appealId: appeal.id, outcome: 'approved', reason: 'אפשרי לאחר ניתוח' })).data
@@ -185,7 +202,76 @@ describe('Nativ callable system flow', () => {
 
     const secretary = users.find((user) => user.email === 'secretary@nativ.demo')!
     const setAccess = httpsCallable<Record<string, unknown>, { roles: string[] }>(functions, 'setUserAccess')
-    const updated = (await setAccess({ uid: secretary.uid, roles: ['secretary', 'access_manager'], active: true })).data
-    expect(updated.roles).toEqual(['secretary', 'access_manager'])
+    const ownUser = users.find((user) => user.email === 'access@nativ.demo')!
+    await expect(setAccess({ uid: ownUser.uid, roles: [], active: true })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+    const updated = (await setAccess({ uid: secretary.uid, roles: ['secretary', 'placement_coordinator', 'access_manager'], active: true })).data
+    expect(updated.roles).toEqual(['secretary', 'placement_coordinator', 'access_manager'])
+
+    await signOut(auth)
+    const secretaryAccount = accounts.find((account) => account.label === 'מזכירות')!
+    await signInWithEmailAndPassword(auth, secretaryAccount.email, secretaryAccount.password)
+    const combinedWorkflow = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'getWorkflow')
+    expect((await combinedWorkflow({ cycleId: demoCycle.id, view: 'coordinator' })).data.assignmentRun).toBeTruthy()
+    expect((await combinedWorkflow({ cycleId: demoCycle.id, view: 'secretary' })).data.assignmentRun).toBeFalsy()
+  })
+
+  it('creates a cycle and catalog and keeps an empty AI review retryable', async () => {
+    await signOut(auth)
+    const coordinator = accounts.find((account) => account.label === 'רכז שיבוץ')!
+    await signInWithEmailAndPassword(auth, coordinator.email, coordinator.password)
+
+    const createCycle = httpsCallable<Record<string, unknown>, AssignmentCycle>(functions, 'createCycle')
+    const created = (await createCycle({ schoolYear: 'תשפ״ח', termLabel: 'מחצית א׳' })).data
+    expect(created).toMatchObject({ status: 'draft', version: 1 })
+
+    const listInstructors = httpsCallable<undefined, Array<{ uid: string; displayName: string }>>(functions, 'listEligibleInstructors')
+    const instructors = (await listInstructors()).data
+    expect(instructors.length).toBeGreaterThan(0)
+
+    const saveCatalog = httpsCallable<Record<string, unknown>, { id: string }>(functions, 'saveCycleCatalog')
+    await saveCatalog({
+      cycleId: created.id,
+      clusters: [{
+        label: 'אמנויות',
+        requiredRankingCount: 1,
+        courses: [{
+          label: 'תיאטרון',
+          description: 'סדנת תיאטרון',
+          subjectArea: 'אמנויות',
+          instructorIds: [instructors[0].uid],
+          minimum: 0,
+          target: 18,
+          maximum: 22,
+          repeatPolicy: 'allowed',
+        }],
+      }],
+    })
+
+    const getCatalog = httpsCallable<{ cycleId: string }, { catalog: { clusters: unknown[] }; courses: unknown[] }>(functions, 'getCycleCatalog')
+    const catalog = (await getCatalog({ cycleId: created.id })).data
+    expect(catalog.catalog.clusters).toHaveLength(1)
+    expect(catalog.courses).toHaveLength(1)
+
+    const listCycles = httpsCallable<undefined, AssignmentCycle[]>(functions, 'listCycles')
+    expect((await listCycles()).data.some((cycle) => cycle.id === created.id)).toBe(true)
+
+    const getCycle = httpsCallable<{ cycleId: string }, AssignmentCycle>(functions, 'getCycle')
+    const configured = (await getCycle({ cycleId: created.id })).data
+    const transition = httpsCallable<Record<string, unknown>, AssignmentCycle>(functions, 'transitionCycle')
+    const opened = (await transition({ cycleId: created.id, expectedVersion: configured.version, to: 'choice_open', reason: 'פתיחת בדיקת מערכת', idempotencyKey: 'system-open-new-cycle' })).data
+    await transition({ cycleId: created.id, expectedVersion: opened.version, to: 'choice_closed', reason: 'סיום בחירה ללא הגשות', idempotencyKey: 'system-close-empty-cycle' })
+
+    const generate = httpsCallable<{ cycleId: string }, WorkflowState>(functions, 'generateAiEvaluations')
+    await expect(generate({ cycleId: created.id })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+    await expect(generate({ cycleId: created.id })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+    const getWorkflow = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'getWorkflow')
+    expect((await getWorkflow({ cycleId: created.id, view: 'coordinator' })).data.aiBatchCreatedAt).toBeFalsy()
+
+    await signOut(auth)
+    const instructor = accounts.find((account) => account.label === 'מנחה קורס')!
+    await signInWithEmailAndPassword(auth, instructor.email, instructor.password)
+    const getInstructorWorkspace = httpsCallable<{ cycleId: string }, { courses: Array<{ label: string; students: string[] }> }>(functions, 'getInstructorWorkspace')
+    const instructorWorkspace = (await getInstructorWorkspace({ cycleId: demoCycle.id })).data
+    expect(instructorWorkspace.courses.some((course) => course.label === 'תיאטרון')).toBe(true)
   })
 })

@@ -21,6 +21,7 @@ export interface HardConstraint {
 
 export interface AssignmentResult {
   studentId: string
+  studentLabel?: string
   clusterId: string
   courseId: string
   rank: number | null

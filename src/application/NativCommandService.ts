@@ -4,7 +4,7 @@ import { transitionCycle as applyCycleTransition, type AssignmentCycle, type Cyc
 import { validatePreferenceSubmission, type PreferenceSubmission } from '../domain/preferences'
 import { DomainValidationError, type AuditEvent } from '../domain/types'
 import { assertCapability, assertOrganizationScope, assertStudentSelfOrManager } from './authorization'
-import { EntityNotFoundError, IdempotencyConflictError } from './errors'
+import { AuthorizationError, EntityNotFoundError, IdempotencyConflictError } from './errors'
 import type { NativRepository, NativTransaction } from './repository'
 
 export interface TransitionCycleInput {
@@ -70,6 +70,7 @@ export class NativCommandService {
   }
 
   async getChoiceContext(actor: ActorContext, cycleId: string): Promise<ChoiceContext> {
+    if (!actor.roles.includes('student') && !actor.capabilities.includes('nativ.assignment.view')) throw new AuthorizationError()
     return this.repository.transact(async (transaction) => {
       const cycle = await requireCycle(transaction, actor.organizationId, cycleId)
       const catalog = await transaction.getCatalogSnapshot(actor.organizationId, cycleId)
@@ -79,6 +80,7 @@ export class NativCommandService {
   }
 
   async listMySubmissions(actor: ActorContext, cycleId: string): Promise<PreferenceSubmission[]> {
+    if (!actor.roles.includes('student')) throw new AuthorizationError()
     return this.repository.transact(async (transaction) => {
       await requireCycle(transaction, actor.organizationId, cycleId)
       const submissions = await transaction.listSubmissions(actor.organizationId, cycleId)
@@ -94,8 +96,15 @@ export class NativCommandService {
   async transitionCycle(actor: ActorContext, input: TransitionCycleInput): Promise<AssignmentCycle> {
     assertOrganizationScope(actor, input.organizationId)
     assertCapability(actor, 'nativ.assignment.manage')
+    if (input.to === 'published') {
+      throw new DomainValidationError([{ code: 'cycle.publish_requires_approved_run', message: 'פרסום מתבצע רק מתוך מסך אישור השיבוץ', path: 'status', severity: 'error' }])
+    }
     return this.executeIdempotently(input.organizationId, input.idempotencyKey, fingerprint('transitionCycle', input), input.occurredAt, async (transaction) => {
       const current = await requireCycle(transaction, input.organizationId, input.cycleId)
+      if (current.status === 'draft' && input.to === 'choice_open') {
+        const catalog = await transaction.getCatalogSnapshot(input.organizationId, input.cycleId)
+        if (!catalog?.clusters.length || catalog.clusters.some((cluster) => !cluster.courses.length || cluster.requiredRankingCount > cluster.courses.length)) throw new DomainValidationError([{ code: 'cycle.catalog_required', message: 'יש להשלים מקבצים וקורסים לפני פתיחת הבחירה', path: 'catalog', severity: 'error' }])
+      }
       const result = applyCycleTransition(current, {
         expectedVersion: input.expectedVersion,
         to: input.to,
@@ -113,6 +122,7 @@ export class NativCommandService {
   async saveDraft(actor: ActorContext, input: SaveDraftInput): Promise<PreferenceSubmission> {
     assertOrganizationScope(actor, input.organizationId)
     assertStudentSelfOrManager(actor, input.studentId)
+    if (actor.uid === input.studentId && !actor.roles.includes('student')) throw new AuthorizationError()
     return this.executeIdempotently(input.organizationId, input.idempotencyKey, fingerprint('saveDraft', input), input.occurredAt, async (transaction) => {
       const cycle = await requireCycle(transaction, input.organizationId, input.cycleId)
       if (cycle.status !== 'choice_open') {
@@ -155,6 +165,7 @@ export class NativCommandService {
   async submitPreferences(actor: ActorContext, input: SubmitPreferencesInput): Promise<PreferenceSubmission> {
     assertOrganizationScope(actor, input.organizationId)
     assertStudentSelfOrManager(actor, input.studentId)
+    if (actor.uid === input.studentId && !actor.roles.includes('student')) throw new AuthorizationError()
     return this.executeIdempotently(input.organizationId, input.idempotencyKey, fingerprint('submitPreferences', input), input.occurredAt, async (transaction) => {
       const cycle = await requireCycle(transaction, input.organizationId, input.cycleId)
       const draft = await transaction.getSubmission(input.organizationId, input.draftId)

@@ -12,26 +12,27 @@ export function StudentPreferenceWorkspace({ cycleId }: StudentPreferenceWorkspa
   const [cycle, setCycle] = useState<AssignmentCycle | null>(null)
   const [workflow, setWorkflow] = useState<WorkflowState | null>(null)
   const [preferences, setPreferences] = useState<ClusterPreference[]>([])
-  const [draftVersion, setDraftVersion] = useState(0)
   const [submissionCount, setSubmissionCount] = useState(0)
   const [message, setMessage] = useState('טוען את טופס הבחירה…')
   const initialized = useRef(false)
-  const saving = useRef(false)
+  const [saving, setSaving] = useState(false)
   const draftVersionRef = useRef(0)
+  const lastSavedSignature = useRef('')
   const [appealDraft, setAppealDraft] = useState({ clusterId: '', requestedCourseId: '', reason: '' })
 
   useEffect(() => {
-    void Promise.all([getChoiceContext(cycleId), listMySubmissions(cycleId), getCycle(cycleId), getWorkflow(cycleId)])
+    void Promise.all([getChoiceContext(cycleId), listMySubmissions(cycleId), getCycle(cycleId), getWorkflow(cycleId, 'student')])
       .then(([choiceContext, submissions, loadedCycle, loadedWorkflow]) => {
         const draft = submissions.find((submission) => submission.status === 'draft')
         setContext(choiceContext)
         setCycle(loadedCycle)
         setWorkflow(loadedWorkflow)
-        setPreferences(draft?.preferences ?? choiceContext.catalog.clusters.map((cluster) => ({
+        const initialPreferences = draft?.preferences ?? choiceContext.catalog.clusters.map((cluster) => ({
           clusterId: cluster.clusterId,
-          rankings: cluster.courses.slice(0, cluster.requiredRankingCount).map((course, index) => ({ courseId: course.courseId, rank: index + 1 })),
-        })))
-        setDraftVersion(draft?.version ?? 0)
+          rankings: Array.from({ length: cluster.requiredRankingCount }, (_, index) => ({ courseId: '', rank: index + 1 })),
+        }))
+        setPreferences(initialPreferences)
+        lastSavedSignature.current = JSON.stringify(initialPreferences)
         draftVersionRef.current = draft?.version ?? 0
         setSubmissionCount(submissions.filter((submission) => submission.status === 'submitted').length)
         setMessage(loadedCycle.status === 'choice_open' ? (draft ? 'הטיוטה האחרונה נטענה.' : 'אפשר להתחיל לדרג. הטופס יישמר אוטומטית.') : 'טופס הבחירה המקורי נשמר לקריאה; מוצג גם מצב השיבוץ העדכני.')
@@ -46,17 +47,18 @@ export function StudentPreferenceWorkspace({ cycleId }: StudentPreferenceWorkspa
   }) ?? false, [context, preferences])
 
   useEffect(() => {
-    if (!initialized.current || !context || cycle?.status !== 'choice_open' || saving.current) return
+    const signature = JSON.stringify(preferences)
+    if (!initialized.current || !context || cycle?.status !== 'choice_open' || saving || signature === lastSavedSignature.current) return
     const timer = window.setTimeout(() => {
-      saving.current = true
+      setSaving(true)
       setMessage('שומר טיוטה…')
       void savePreferenceDraft(cycleId, preferences, draftVersionRef.current)
-        .then((draft) => { draftVersionRef.current = draft.version; setDraftVersion(draft.version); setMessage('הטיוטה נשמרה אוטומטית.') })
+        .then((draft) => { lastSavedSignature.current = signature; draftVersionRef.current = draft.version; setMessage('הטיוטה נשמרה אוטומטית.') })
         .catch((error: unknown) => setMessage(error instanceof Error ? error.message : 'שמירת הטיוטה נכשלה'))
-        .finally(() => { saving.current = false })
+        .finally(() => setSaving(false))
     }, 900)
     return () => window.clearTimeout(timer)
-  }, [context, cycle, cycleId, preferences])
+  }, [context, cycle, cycleId, preferences, saving])
 
   function updateRanking(clusterId: string, rank: number, courseId: string) {
     setPreferences((current) => current.map((preference) => preference.clusterId === clusterId
@@ -69,26 +71,25 @@ export function StudentPreferenceWorkspace({ cycleId }: StudentPreferenceWorkspa
   }
 
   async function submit() {
-    if (!complete || saving.current) return
+    if (!complete || saving) return
     try {
-      saving.current = true
+      setSaving(true)
       setMessage('שומר ומגיש…')
       const saved = await savePreferenceDraft(cycleId, preferences, draftVersionRef.current)
       draftVersionRef.current = saved.version
-      setDraftVersion(saved.version)
       const submitted = await submitPreferenceDraft(cycleId, saved.version, submissionCount + 1)
       setSubmissionCount(submitted.submissionVersion)
-      setMessage(`הטופס הוגש בהצלחה. גרסת הגשה ${submitted.submissionVersion} נשמרה.`)
+      setMessage('הטופס הוגש בהצלחה והבחירות נשמרו.')
     } catch (error) { setMessage(error instanceof Error ? error.message : 'הגשת הטופס נכשלה') }
-    finally { saving.current = false }
+    finally { setSaving(false) }
   }
 
   async function sendAppeal() {
     if (!appealDraft.clusterId || !appealDraft.requestedCourseId || !appealDraft.reason.trim()) return
     try {
-      const appeal = await submitAppeal(cycleId, appealDraft.clusterId, appealDraft.requestedCourseId, appealDraft.reason)
-      setWorkflow(await getWorkflow(cycleId))
-      setMessage(`הערעור הוגש ונשמר במזהה ${appeal.id.slice(0, 8)}.`)
+      await submitAppeal(cycleId, appealDraft.clusterId, appealDraft.requestedCourseId, appealDraft.reason)
+      setWorkflow(await getWorkflow(cycleId, 'student'))
+      setMessage('הערעור הוגש בהצלחה. ניתן לעקוב אחר מצבו כאן.')
       setAppealDraft({ clusterId: '', requestedCourseId: '', reason: '' })
     } catch (error) { setMessage(error instanceof Error ? error.message : 'הגשת הערעור נכשלה') }
   }
@@ -100,8 +101,9 @@ export function StudentPreferenceWorkspace({ cycleId }: StudentPreferenceWorkspa
     const selectedCluster = context.catalog.clusters.find((cluster) => cluster.clusterId === appealDraft.clusterId)
     const currentCourseId = assignments.find((entry) => entry.clusterId === appealDraft.clusterId)?.courseId
     return <section className="workspace-card" aria-labelledby="student-result-title"><div className="workspace-heading"><div><span className="eyebrow">אזור תלמיד</span><h2 id="student-result-title">השיבוץ שלי</h2></div><span className="status-pill">{cycle.status === 'appeals' ? 'ערעורים פתוחים' : 'התהליך מתקדם'}</span></div><p className="workspace-message" aria-live="polite">{message}</p>
-      <div className="result-grid">{assignments.length ? assignments.map((assignment) => <article className="cluster-card" key={assignment.clusterId}><h3>{context.catalog.clusters.find((cluster) => cluster.clusterId === assignment.clusterId)?.label}</h3><strong>{context.catalog.clusters.flatMap((cluster) => cluster.courses).find((course) => course.courseId === assignment.courseId)?.label ?? assignment.courseId}</strong><p>{assignment.explanation}</p></article>) : <p>השיבוץ טרם פורסם.</p>}</div>
-      {cycle.status === 'appeals' && <div className="workflow-section"><h3>הגשת ערעור</h3><label className="rationale-field"><span>מקבץ</span><select value={appealDraft.clusterId} onChange={(event) => setAppealDraft({ clusterId: event.target.value, requestedCourseId: '', reason: appealDraft.reason })}><option value="">בחירת מקבץ</option>{assignments.map((assignment) => <option key={assignment.clusterId} value={assignment.clusterId}>{context.catalog.clusters.find((cluster) => cluster.clusterId === assignment.clusterId)?.label}</option>)}</select></label><label className="rationale-field"><span>הקורס המבוקש</span><select value={appealDraft.requestedCourseId} onChange={(event) => setAppealDraft({ ...appealDraft, requestedCourseId: event.target.value })}><option value="">בחירת קורס</option>{selectedCluster?.courses.filter((course) => course.courseId !== currentCourseId).map((course) => <option key={course.courseId} value={course.courseId}>{course.label}</option>)}</select></label><label className="rationale-field"><span>סיבת הערעור</span><textarea rows={3} value={appealDraft.reason} onChange={(event) => setAppealDraft({ ...appealDraft, reason: event.target.value })} /></label><button type="button" className="primary-action" onClick={() => void sendAppeal()}>הגשת ערעור</button>{workflow.appeals.map((appeal) => <p key={appeal.id}>ערעור {appeal.clusterId}: {appeal.status}</p>)}</div>}
+      <div className="result-grid">{assignments.length ? assignments.map((assignment) => <article className="cluster-card" key={assignment.clusterId}><h3>{context.catalog.clusters.find((cluster) => cluster.clusterId === assignment.clusterId)?.label}</h3><strong>{context.catalog.clusters.flatMap((cluster) => cluster.courses).find((course) => course.courseId === assignment.courseId)?.label ?? 'הקורס שנבחר'}</strong></article>) : <p>השיבוץ טרם פורסם.</p>}</div>
+      {workflow.notifications.filter((entry) => entry.channel === 'in_app').length > 0 && <div className="workflow-section"><h3>הודעות</h3>{workflow.notifications.filter((entry) => entry.channel === 'in_app').map((notification) => <article className="workflow-item" key={notification.id}><strong>{notification.subject}</strong><p>{notification.body}</p></article>)}</div>}
+      {cycle.status === 'appeals' && <div className="workflow-section"><h3>הגשת ערעור</h3><label className="rationale-field"><span>מקבץ</span><select value={appealDraft.clusterId} onChange={(event) => setAppealDraft({ clusterId: event.target.value, requestedCourseId: '', reason: appealDraft.reason })}><option value="">בחירת מקבץ</option>{assignments.map((assignment) => <option key={assignment.clusterId} value={assignment.clusterId}>{context.catalog.clusters.find((cluster) => cluster.clusterId === assignment.clusterId)?.label}</option>)}</select></label><label className="rationale-field"><span>הקורס המבוקש</span><select value={appealDraft.requestedCourseId} onChange={(event) => setAppealDraft({ ...appealDraft, requestedCourseId: event.target.value })}><option value="">בחירת קורס</option>{selectedCluster?.courses.filter((course) => course.courseId !== currentCourseId).map((course) => <option key={course.courseId} value={course.courseId}>{course.label}</option>)}</select></label><label className="rationale-field"><span>סיבת הערעור</span><textarea rows={3} value={appealDraft.reason} onChange={(event) => setAppealDraft({ ...appealDraft, reason: event.target.value })} /></label><button type="button" className="primary-action" disabled={!appealDraft.clusterId || !appealDraft.requestedCourseId || !appealDraft.reason.trim()} onClick={() => void sendAppeal()}>הגשת ערעור</button>{workflow.appeals.map((appeal) => <p key={appeal.id}>{context.catalog.clusters.find((cluster) => cluster.clusterId === appeal.clusterId)?.label}: {{ submitted: 'נשלח לבדיקה', approved_pending_execution: 'אושר וממתין לביצוע', rejected: 'נדחה', executed: 'השינוי בוצע' }[appeal.status]}</p>)}</div>}
     </section>
   }
 
@@ -109,7 +111,7 @@ export function StudentPreferenceWorkspace({ cycleId }: StudentPreferenceWorkspa
     <section className="workspace-card" aria-labelledby="student-form-title">
       <div className="workspace-heading">
         <div><span className="eyebrow">אזור תלמיד</span><h2 id="student-form-title">טופס הבחירה שלי</h2></div>
-        <span className="status-pill">גרסת טיוטה {draftVersion}</span>
+        <span className="status-pill">{submissionCount ? 'הוגש' : 'טיוטה'}</span>
       </div>
       <p className="workspace-message" aria-live="polite">{message}</p>
       <div className="cluster-grid">
@@ -139,8 +141,8 @@ export function StudentPreferenceWorkspace({ cycleId }: StudentPreferenceWorkspa
         })}
       </div>
       <div className="workspace-actions">
-        <button type="button" className="primary-action" onClick={() => void submit()} disabled={!complete}>אישור והגשת הבחירות</button>
-        <span>{submissionCount ? `${submissionCount} גרסאות הוגשו ונשמרו` : 'טרם הוגשה גרסה'}</span>
+        <button type="button" className="primary-action" onClick={() => void submit()} disabled={!complete || saving}>אישור והגשת הבחירות</button>
+        <span>{submissionCount ? 'הטופס האחרון הוגש ונשמר' : 'הבחירות טרם הוגשו'}</span>
       </div>
     </section>
   )

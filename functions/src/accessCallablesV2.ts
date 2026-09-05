@@ -9,8 +9,8 @@ import { actorFromRequest, inputRecord, requiredString, roleCapabilityMap } from
 
 export interface AccessUserSummary { uid: string; email?: string; displayName?: string; roles: RoleId[]; capabilities: CapabilityId[]; active: boolean; coreRole?: string }
 
-async function requireAccessManager(request: Parameters<typeof actorFromRequest>[0]) {
-  const actor = await actorFromRequest(request)
+async function requireAccessManager(request: Parameters<typeof actorFromRequest>[0], operation: 'read' | 'write' = 'write') {
+  const actor = await actorFromRequest(request, operation)
   if (!actor.capabilities.includes('nativ.access.manage')) throw new HttpsError('permission-denied', 'אין הרשאת ניהול גישה')
   return actor
 }
@@ -42,7 +42,7 @@ export const claimInitialAccessManager = onCall(callableOptions, async (request)
 })
 
 export const listAccessUsers = onCall(callableOptions, async (request) => {
-  const actor = await requireAccessManager(request)
+  const actor = await requireAccessManager(request, 'read')
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const result = await getAuth().listUsers(1000)
     return result.users.filter((user) => user.customClaims?.organizationId === actor.organizationId).map((user): AccessUserSummary => {
@@ -59,7 +59,7 @@ export const listAccessUsers = onCall(callableOptions, async (request) => {
     const memberData = member.data()
     const access = accessByUid.get(member.id)
     const assignedRoles = access?.active === false ? [] : validRoles(access?.roles)
-    const roles = memberData.role === 'student' ? [...new Set<RoleId>(['student', ...assignedRoles])] : assignedRoles
+    const roles = memberData.role === 'student' && access?.active !== false ? [...new Set<RoleId>(['student', ...assignedRoles])] : assignedRoles
     return { uid: member.id, email: String(memberData.email ?? ''), displayName: String(memberData.fullName ?? ''), roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], active: memberData.active === true && access?.active !== false, coreRole: String(memberData.role ?? '') }
   })
 })
@@ -73,6 +73,11 @@ export const setUserAccess = onCall(callableOptions, async (request) => {
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const user = await getAuth().getUser(uid)
     if (user.customClaims?.organizationId !== actor.organizationId) throw new HttpsError('permission-denied', 'אין הרשאה לשנות משתמש מארגון אחר')
+    if ((validRoles(user.customClaims?.roles).includes('access_manager')) && !roles.includes('access_manager')) {
+      const members = await getAuth().listUsers(1000)
+      const anotherManager = members.users.some((entry) => entry.uid !== uid && entry.customClaims?.organizationId === actor.organizationId && entry.customClaims?.active === true && validRoles(entry.customClaims?.roles).includes('access_manager'))
+      if (!anotherManager) throw new HttpsError('failed-precondition', 'לא ניתן להסיר את מנהל הגישה הפעיל האחרון')
+    }
     await getAuth().setCustomUserClaims(uid, { ...user.customClaims, organizationId: actor.organizationId, roles, capabilities, active: data.active !== false })
     const auditId = randomUUID()
     await nativFirestore.doc(auditEventDocumentPath(actor.organizationId, auditId)).create({ id: auditId, organizationId: actor.organizationId, actorId: actor.uid, occurredAt: new Date().toISOString(), action: 'access.roles.updated', entityType: 'UserAccess', entityId: uid, reason: `תפקידים קודמים: ${JSON.stringify(user.customClaims?.roles ?? [])}; תפקידים חדשים: ${JSON.stringify(roles)}` })
@@ -82,6 +87,10 @@ export const setUserAccess = onCall(callableOptions, async (request) => {
   if (!membership.exists || membership.data()?.active !== true) throw new HttpsError('permission-denied', 'המשתמש אינו חבר פעיל בארגון')
   const reference = nativFirestore.doc(`organizations/${actor.organizationId}/accessAssignments/${uid}`)
   const previous = await reference.get()
+  if (validRoles(previous.data()?.roles).includes('access_manager') && !roles.includes('access_manager')) {
+    const anotherManager = await nativFirestore.collection(`organizations/${actor.organizationId}/accessAssignments`).where('roles', 'array-contains', 'access_manager').where('active', '==', true).limit(2).get()
+    if (!anotherManager.docs.some((entry) => entry.id !== uid)) throw new HttpsError('failed-precondition', 'לא ניתן להסיר את מנהל הגישה הפעיל האחרון')
+  }
   const auditId = randomUUID()
   const batch = nativFirestore.batch()
   batch.set(reference, { organizationId: actor.organizationId, uid, roles, active: data.active !== false, updatedAt: FieldValue.serverTimestamp(), updatedBy: actor.uid, ...(!previous.exists ? { createdAt: FieldValue.serverTimestamp(), createdBy: actor.uid } : {}) }, { merge: true })
