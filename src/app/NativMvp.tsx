@@ -1,3 +1,4 @@
+import { SchoolBrand } from '../components/SchoolBrand'
 import { isCurrentYearWindow, preferredCycleId, schoolYearLabel } from '../domain/schoolYear'
 import { resolveSession, withSessionTimeout } from './sessionResolution'
 import { getDownloadURL, ref } from 'firebase/storage'
@@ -160,7 +161,7 @@ export function NativMvp() {
   return <div className={authenticatedUser ? 'app-shell work-shell' : 'app-shell login-shell'}>
     <header className="topbar">
       <a className="brand" href="#main" aria-label="נתיב — מערכת שיבוץ קורסי בחירה"><span className="brand-mark"><img src="/nativ-mark.png" alt="" /></span><span><strong>נתיב</strong><small>מערכת שיבוץ קורסי בחירה</small></span></a>
-      {session && <div className="school-brand">{schoolLogo && <img src={schoolLogo} alt="לוגו בית הספר" onError={() => setLogoResult({ path: '', url: '' })} />}<strong>{session.access.organizationName}</strong></div>}
+      {session && <SchoolBrand className="school-brand" src={schoolLogo} name={session.access.organizationName} />}
     </header>
     <main id="main"><section className="mvp-shell" aria-labelledby="mvp-title">
     <div className="workspace-heading"><div><span className="eyebrow">החשבון שלך</span><h2 id="mvp-title">{authenticatedUser ? (selectedArea ? areaLabels[selectedArea] : 'סביבת העבודה') : 'כניסה לנתיב'}</h2></div>{authenticatedUser && <button type="button" className="text-action" onClick={() => void navigate(logout)}>יציאה</button>}</div>
