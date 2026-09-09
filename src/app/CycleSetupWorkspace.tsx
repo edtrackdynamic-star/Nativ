@@ -1,3 +1,4 @@
+import { currentSchoolYearStart, schoolYearId, schoolYearOptions } from '../domain/schoolYear'
 import { useEffect, useState } from 'react'
 import { useUnsavedChanges, useConfirmAction } from './interaction'
 import type { AssignmentCycle } from '../domain/cycle'
@@ -14,7 +15,7 @@ function move<T>(list:T[], index:number, direction:number) { const next=[...list
 export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cycle?: AssignmentCycle; onChanged: (createdId?: string) => Promise<void>; readOnly?: boolean }) {
   const { confirm, confirmation } = useConfirmAction()
   const [savedSignature,setSavedSignature]=useState('')
-  const [schoolYear,setSchoolYear]=useState(''); const [termLabel,setTermLabel]=useState('')
+  const [initialSchoolYear]=useState(()=>schoolYearId(currentSchoolYearStart())); const [schoolYear,setSchoolYear]=useState(initialSchoolYear); const [termLabel,setTermLabel]=useState('')
   const [clusters,setClusters]=useState<CatalogClusterDraft[]>([emptyCluster()])
   const [design,setDesign]=useState<FormDesign>(defaultFormDesign)
   const [classes,setClasses]=useState<Array<{id:string;name:string}>>([])
@@ -28,7 +29,7 @@ export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cy
   const [previewMessage,setPreviewMessage]=useState('')
   const locked = readOnly || Boolean(cycle && cycle.status !== 'draft')
   const signature=JSON.stringify({clusters,design})
-  useUnsavedChanges(!locked && (cycle ? loaded && signature!==savedSignature : Boolean(schoolYear || termLabel)))
+  useUnsavedChanges(!locked && (cycle ? loaded && signature!==savedSignature : Boolean(schoolYear!==initialSchoolYear || termLabel)))
   const cycleId=cycle?.id
   useEffect(()=>{ if(!cycleId)return;let active=true;void Promise.all([listEligibleInstructors(),getCycleCatalog(cycleId),listEligibleClasses()]).then(([teachers,data,schoolClasses])=>{
     if(!active)return;setInstructors(teachers);setClasses(schoolClasses)
@@ -41,7 +42,7 @@ export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cy
   function updateCourse(ci:number,ti:number,patch:Partial<CatalogCourseDraft>){updateCluster(ci,{courses:clusters[ci].courses.map((item,i)=>i===ti?{...item,...patch}:item)})}
   async function save(){if(!cycle || pending || locked)return;try{if(clusters.some(c=>c.eligibleClassIds?.length===0))throw new Error('יש לבחור כיתה אחת לפחות לכל מקבץ, או לבחור בכל הכיתות.');setPending(true);const form=parseFormDesign(design);await saveCycleCatalog(cycle.id,clusters,form,cycle.version);setSavedSignature(signature);await onChanged();setMessage('הטופס והקורסים נשמרו. אפשר לעבור לניהול השיבוץ ולפתוח את הבחירה.')}catch(error){setMessage(error instanceof Error?error.message:'השמירה נכשלה')}finally{setPending(false)}}
   function preview(classId=previewClass){try{parseFormDesign(design);const values=clusters.map((cluster,i)=>({eligibleClassIds:cluster.eligibleClassIds,clusterId:String(i),label:cluster.label||'מקבץ ללא שם',description:cluster.description,rationaleMode:cluster.rationaleMode,requiredRankingCount:cluster.requiredRankingCount,courses:cluster.courses.map((course,j)=>({courseId:i+'-'+j,logicalCourseId:i+'-'+j,label:course.label||'קורס ללא שם',description:course.description,documentUrl:safeLink(course.documentUrl,true),imageUrl:safeLink(course.imageUrl),instructorNames:course.instructorIds.map(id=>instructors.find(t=>t.uid===id)?.displayName??'מורה')}))}));const visible=classId==='*'?values:values.filter(c=>includesClass(c,classId));setPreviewClass(classId);setPreviewClusters(visible);setPreviewPreferences(visible.map(c=>({clusterId:c.clusterId,rankings:Array.from({length:c.requiredRankingCount},(_,i)=>({rank:i+1,courseId:''}))})));setPreviewMessage('');setTab('preview')}catch(error){setMessage(error instanceof Error?error.message:'בדקו את פרטי הטופס')}}
-  if(!cycle)return <section className="workspace-card"><h2>יצירת תהליך בחירה</h2><form onSubmit={event=>{event.preventDefault();void create()}}><div className="setup-grid"><label>שנת לימודים<input required value={schoolYear} onChange={e=>setSchoolYear(e.target.value)} placeholder="לדוגמה: תשפ״ז" /></label><label>שם התהליך / תקופה<input required value={termLabel} onChange={e=>setTermLabel(e.target.value)} placeholder="לדוגמה: קורסי בחירה במחצית א׳" /></label></div><button className="primary-action" disabled={pending || readOnly}>יצירת התהליך והמשך להגדרות</button></form><p role="status">{message}</p></section>
+  if(!cycle)return <section className="workspace-card"><h2>יצירת תהליך בחירה</h2><form onSubmit={event=>{event.preventDefault();void create()}}><div className="setup-grid"><label>שנת לימודים<select required value={schoolYear} onChange={e=>setSchoolYear(e.target.value)}>{schoolYearOptions().map(year=><option key={year.id} value={year.id}>{year.label}</option>)}</select></label><label>שם התהליך / תקופה<input required value={termLabel} onChange={e=>setTermLabel(e.target.value)} placeholder="לדוגמה: קורסי בחירה במחצית א׳" /></label></div><button className="primary-action" disabled={pending || readOnly}>יצירת התהליך והמשך להגדרות</button></form><p role="status">{message}</p></section>
   return <section className="workspace-card"><h2>עריכת תהליך הבחירה</h2>{confirmation}<p role="status">{message}</p>
     {locked && <p className="read-only-notice">הטופס פתוח לצפייה. לשינוי מבנה הבחירה יש ליצור תהליך חדש, כדי לשמור על הבחירות הקיימות.</p>}
     <nav className="role-navigation" aria-label="עריכת טופס">{(['courses','design'] as const).map(id=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{id==='courses'?'מקבצים וקורסים':'עיצוב והוראות'}</button>)}<button className={tab==='preview'?'active':''} onClick={()=>preview()} disabled={!loaded}>תצוגת תלמיד</button></nav>

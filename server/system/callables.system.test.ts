@@ -1,3 +1,4 @@
+import { currentSchoolYearStart, schoolYearId } from '../../src/domain/schoolYear'
 import { getAuth as getAdminAuth } from 'firebase-admin/auth'
 import type { ChoiceContext } from '../../src/application/NativCommandService'
 import { deleteApp, initializeApp, type FirebaseApp } from 'firebase/app'
@@ -7,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { AssignmentCycle } from '../../src/domain/cycle'
 import type { PreferenceSubmission } from '../../src/domain/preferences'
 import type { WorkflowState } from '../../src/domain/workflow'
-import { demoCycle, demoSubmission } from '../../src/demo/demoCycle'
+import { demoCatalogSnapshot, demoCourses, demoCycle, demoSubmission } from '../../src/demo/demoCycle'
 import { initializeApp as initializeAdminApp, deleteApp as deleteAdminApp } from 'firebase-admin/app'
 import { getFirestore } from 'firebase-admin/firestore'
 
@@ -254,7 +255,7 @@ describe('Nativ callable system flow', () => {
     await signInWithEmailAndPassword(auth, coordinator.email, coordinator.password)
 
     const createCycle = httpsCallable<Record<string, unknown>, AssignmentCycle>(functions, 'createCycle')
-    const created = (await createCycle({ schoolYear: 'תשפ״ח', termLabel: 'מחצית א׳' })).data
+    const created = (await createCycle({ schoolYear: schoolYearId(currentSchoolYearStart()+1), termLabel: 'מחצית א׳' })).data
     expect(created).toMatchObject({ status: 'draft', version: 1 })
 
     const listInstructors = httpsCallable<undefined, Array<{ uid: string; displayName: string }>>(functions, 'listEligibleInstructors')
@@ -320,7 +321,7 @@ describe('Nativ callable system flow', () => {
     await signOut(auth);await signInWithEmailAndPassword(auth,coordinator.email,coordinator.password)
     const classes=await call<Array<{id:string}>>('listEligibleClasses')
     expect(classes.map(c=>c.id)).toEqual(['class-demo-7a','class-demo-7b'])
-    let cycle=await call<AssignmentCycle>('createCycle',{schoolYear:'test',termLabel:'כיתות במקבצים'})
+    let cycle=await call<AssignmentCycle>('createCycle',{schoolYear:schoolYearId(currentSchoolYearStart()),termLabel:'כיתות במקבצים'})
     const teachers=await call<Array<{uid:string}>>('listEligibleInstructors')
     const course={label:'קורס',instructorIds:[teachers[0].uid],minimum:0,target:10,maximum:20,repeatPolicy:'allowed'}
     const clusters=[{label:'ז1 בלבד',eligibleClassIds:['class-demo-7a'],requiredRankingCount:1,courses:[course]},{label:'ז2 בלבד',eligibleClassIds:['class-demo-7b'],requiredRankingCount:1,courses:[course]},{label:'כולם',requiredRankingCount:1,courses:[course]}]
@@ -356,6 +357,27 @@ describe('Nativ callable system flow', () => {
     await call('transitionCycle',{cycleId:cycle.id,expectedVersion:cycle.version,to:'assignment',reason:'test',idempotencyKey:'class-assign'})
     workflow=await call<WorkflowState>('runAssignment',{cycleId:cycle.id})
     expect(workflow.assignmentRun!.assignments.map(a=>a.clusterId).sort()).toEqual(context.catalog.clusters.map(c=>c.clusterId).sort())
+  })
+
+  it('accepts only the three canonical school years and retains archive history beyond 50 cycles',async()=>{
+    await signOut(auth)
+    const coordinator=accounts.find(a=>a.label==='רכז שיבוץ')!
+    await signInWithEmailAndPassword(auth,coordinator.email,coordinator.password)
+    const create=httpsCallable<Record<string,unknown>,AssignmentCycle>(functions,'createCycle')
+    const start=currentSchoolYearStart()
+    for(const schoolYear of ['תשפ״ז','2026/2027',schoolYearId(start-2),schoolYearId(start+2)]) await expect(create({schoolYear,termLabel:'bad'})).rejects.toMatchObject({code:'functions/invalid-argument'})
+    for(const year of [start-1,start,start+1]) expect((await create({schoolYear:schoolYearId(year),termLabel:'בדיקת שנה'})).data.schoolYear).toBe(schoolYearId(year))
+    const db=getFirestore(adminApp), batch=db.batch()
+    for(let i=0;i<51;i++){
+      const id=`archive-test-${i}`,base=`organizations/${demoCycle.organizationId}`
+      batch.set(db.doc(`${base}/nativCycles/${id}`),{...demoCycle,id,schoolYear:schoolYearId(start-2),status:'closed'})
+      batch.set(db.doc(`${base}/nativCatalogSnapshots/${id}`),{...demoCatalogSnapshot,cycleId:id})
+      batch.set(db.doc(`${base}/nativCourseCatalogs/${id}`),{courses:demoCourses.map(c=>({...c,cycleId:id}))})
+    }
+    await batch.commit()
+    const cycles=(await httpsCallable<undefined,AssignmentCycle[]>(functions,'listCycles')()).data
+    expect(cycles.filter(c=>c.id.startsWith('archive-test-'))).toHaveLength(51)
+    expect(cycles.some(c=>c.schoolYear===schoolYearId(start))).toBe(true)
   })
 
 })

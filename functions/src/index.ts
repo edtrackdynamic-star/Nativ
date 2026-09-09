@@ -1,3 +1,4 @@
+import { isCurrentYearWindow } from '../../src/domain/schoolYear'
 import { eligibleClasses } from './classDirectory'
 import { parseFormDesign, safeLink } from '../../src/domain/formDesign'
 import { randomUUID } from 'node:crypto'
@@ -60,7 +61,7 @@ export const getCycle = onCall(callableOptions, async (request) => {
 export const listCycles = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request, 'read')
   if (!actor.roles.length) throw new HttpsError('permission-denied', 'לא הוקצה תפקיד בנתיב')
-  const snapshot = await firestore.collection(`organizations/${actor.organizationId}/nativCycles`).limit(50).get()
+  const snapshot = await firestore.collection(`organizations/${actor.organizationId}/nativCycles`).get()
   const cycles = snapshot.docs.map((entry) => entry.data() as AssignmentCycle)
   if (actor.roles.includes('student') && !actor.capabilities.includes('nativ.assignment.view')) return cycles.filter((cycle) => ['choice_open', 'published', 'appeals', 'closed'].includes(cycle.status)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   return cycles.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
@@ -71,6 +72,7 @@ export const createCycle = onCall(callableOptions, async (request) => {
   if (!actor.capabilities.includes('nativ.assignment.manage')) throw new HttpsError('permission-denied', 'אין הרשאה להקים מחזור')
   const data = inputRecord(request.data)
   const schoolYear = requiredString(data, 'schoolYear')
+  if (!isCurrentYearWindow(schoolYear)) throw new HttpsError('invalid-argument', 'יש לבחור את שנת הלימודים הקודמת, הנוכחית או הבאה מתוך הרשימה. אם השנה התחלפה, רעננו את המסך.')
   const termLabel = requiredString(data, 'termLabel')
   const now = new Date().toISOString()
   const id = `cycle-${randomUUID()}`

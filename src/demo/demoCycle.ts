@@ -11,7 +11,7 @@ const baseMetadata = {
 export const demoCycle: AssignmentCycle = {
   ...baseMetadata,
   id: 'cycle-demo-2027-a',
-  schoolYear: 'תשפ״ז',
+  schoolYear: '2026-2027',
   termLabel: 'מחצית א׳',
   status: 'choice_open',
   choiceOpensAt: '2026-08-27T08:00:00Z',

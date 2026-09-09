@@ -1,3 +1,4 @@
+import { isCurrentYearWindow, preferredCycleId, schoolYearLabel } from '../domain/schoolYear'
 import { resolveSession, withSessionTimeout } from './sessionResolution'
 import { getDownloadURL, ref } from 'firebase/storage'
 import { ReadOnlyContext } from './readOnly'
@@ -42,6 +43,8 @@ export function NativMvp() {
   const [cycles, setCycles] = useState<AssignmentCycle[]>([])
   const [selectedCycleId, setSelectedCycleId] = useState<string | null>(null)
   const [coordinatorPage,setCoordinatorPage] = useState<'workflow'|'form'>('form')
+  const [showArchive,setShowArchive] = useState(false)
+  const visibleCycles=cycles.filter(c=>showArchive ? !isCurrentYearWindow(c.schoolYear) : isCurrentYearWindow(c.schoolYear))
   const [creatingCycle, setCreatingCycle] = useState(false)
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState(firebaseConfigured ? 'אפשר להיכנס ולהמשיך.' : 'המערכת אינה זמינה כרגע.')
@@ -66,6 +69,7 @@ export function NativMvp() {
       setCyclesLoading(Boolean(user))
       setSelectedCycleId(null)
       setCreatingCycle(false)
+      setShowArchive(false)
       setAuthError(false)
       if (!user) return
       setMessage('טוען את סביבת העבודה שלך…')
@@ -82,7 +86,7 @@ export function NativMvp() {
         setSession({ user: resolvedUser, access })
         setSelectedArea(areaOrder.find((role) => access.roles.includes(role)) ?? null)
         setMessage(access.displayName ? `שלום ${access.displayName}` : 'הכניסה הושלמה.')
-        void withSessionTimeout(listCycles()).then((loaded) => { if (authRequest.current === requestId) { setCycles(loaded); setCyclesLoading(false); setSelectedCycleId(loaded[0]?.id ?? null) } }).catch(() => { if (authRequest.current === requestId) { setAuthError(true); setMessage('לא ניתן לטעון את מחזורי השיבוץ. נסו שוב.'); } })
+        void withSessionTimeout(listCycles()).then((loaded) => { if (authRequest.current === requestId) { setCycles(loaded); setCyclesLoading(false); setSelectedCycleId(preferredCycleId(loaded)) } }).catch(() => { if (authRequest.current === requestId) { setAuthError(true); setMessage('לא ניתן לטעון את מחזורי השיבוץ. נסו שוב.'); } })
       }).catch((error: unknown) => { if (authRequest.current === requestId) { ++authRequest.current; setAuthError(true); setMessage(friendlyError(error, 'לא ניתן לטעון את ההרשאות.')) } })
     })
     if (emulatorMode) void seedDemoEnvironment().then((result) => setAccounts(result.accounts)).catch(() => setMessage('סביבת הבדיקה אינה זמינה.'))
@@ -100,7 +104,7 @@ export function NativMvp() {
   }, [session?.access.organizationId, session?.access.organizationLogoPath])
 
   const availableAreas = useMemo(() => areaOrder.filter((role) => session?.access.roles.includes(role)), [session])
-  async function refreshCycles(createdId?: string) { const loaded = await listCycles(); setCycles(loaded); setSelectedCycleId((current) => createdId ?? (current && loaded.some((cycle) => cycle.id === current) ? current : loaded[0]?.id ?? null)); if(createdId)setCoordinatorPage('form'); setCreatingCycle(false) }
+  async function refreshCycles(createdId?: string) { const loaded = await listCycles(); setCycles(loaded); setSelectedCycleId((current) => createdId ?? (current && loaded.some((cycle) => cycle.id === current) ? current : (showArchive ? loaded.find(c=>!isCurrentYearWindow(c.schoolYear))?.id ?? null : preferredCycleId(loaded)))); if(createdId){setCoordinatorPage('form');setShowArchive(false)}; setCreatingCycle(false) }
 
   async function login(account: DemoAccount) {
     if (!nativAuth || pending) return
@@ -161,7 +165,7 @@ export function NativMvp() {
     <main id="main"><section className="mvp-shell" aria-labelledby="mvp-title">
     <div className="workspace-heading"><div><span className="eyebrow">החשבון שלך</span><h2 id="mvp-title">{authenticatedUser ? (selectedArea ? areaLabels[selectedArea] : 'סביבת העבודה') : 'כניסה לנתיב'}</h2></div>{authenticatedUser && <button type="button" className="text-action" onClick={() => void navigate(logout)}>יציאה</button>}</div>
     {confirmation}
-    {creatingCycle && <button className="text-action" onClick={() => void navigate(() => { setCreatingCycle(false); setSelectedCycleId(cycles[0]?.id ?? null) })}>חזרה למחזור הקיים</button>}
+    {creatingCycle && <button className="text-action" onClick={() => void navigate(() => { setCreatingCycle(false); setSelectedCycleId(visibleCycles[0]?.id ?? null) })}>חזרה למחזור הקיים</button>}
     <p className="workspace-message" aria-live="polite">{message}</p>
     {session && cyclesLoading && !authError && <p role="status">טוען את מחזורי השיבוץ…</p>}
     {authError && <button type="button" className="secondary-action" onClick={() => setAuthReload((value) => value + 1)}>ניסיון חוזר</button>}
@@ -178,12 +182,16 @@ export function NativMvp() {
     {session && !session.access.roles.length && <div className="workspace-card"><h3>עדיין לא הוקצה לך תפקיד בנתיב</h3><p>מנהל הגישה בבית הספר יכול להקצות לך תפקיד מתאים.</p>{session.access.coreRole === 'school_admin' && <button type="button" className="primary-action" disabled={pending} onClick={() => void activateInitialManager()}>הפעלת מנהל הגישה הראשון</button>}</div>}
     {session?.access.accessMode === 'read_only' && <p className="read-only-notice">המידע זמין לצפייה בלבד. לא ניתן לבצע שינויים כעת.</p>}
     {availableAreas.length > 1 && <nav className="role-navigation" aria-label="בחירת סביבת עבודה">{availableAreas.map((role) => <button type="button" className={selectedArea === role ? 'active' : ''} aria-current={selectedArea === role ? 'page' : undefined} key={role} onClick={() => void navigate(() => setSelectedArea(role))}>{areaLabels[role]}</button>)}</nav>}
-    {session && selectedArea && selectedArea !== 'access_manager' && !creatingCycle && cycles.length > 0 && <label className="cycle-picker">מחזור<select value={selectedCycleId ?? ''} onChange={(event) => { const id = event.target.value; void navigate(() => setSelectedCycleId(id)) }}>{cycles.map((cycle) => <option value={cycle.id} key={cycle.id}>{cycle.schoolYear} · {cycle.termLabel}</option>)}</select></label>}
+    {session && selectedArea && selectedArea !== 'access_manager' && !creatingCycle && <>
+      <nav className="role-navigation" aria-label="תהליכים לפי שנים">{[false,true].map(archive=><button key={String(archive)} className={showArchive===archive?'active':''} aria-pressed={showArchive===archive} onClick={()=>void navigate(()=>{setShowArchive(archive);setSelectedCycleId(archive ? cycles.find(c=>!isCurrentYearWindow(c.schoolYear))?.id ?? null : preferredCycleId(cycles))})}>{archive?'ארכיון שנים קודמות':'תהליכים אחרונים'}</button>)}</nav>
+      {visibleCycles.length>0 && <label className="cycle-picker">מחזור<select value={selectedCycleId ?? ''} onChange={event=>{const id=event.target.value;void navigate(()=>setSelectedCycleId(id))}}>{[...new Set(visibleCycles.map(c=>c.schoolYear))].sort().reverse().map(year=><optgroup key={year} label={schoolYearLabel(year)}>{visibleCycles.filter(c=>c.schoolYear===year).map(c=><option key={c.id} value={c.id}>{schoolYearLabel(c.schoolYear)} · {c.termLabel}</option>)}</optgroup>)}</select></label>}
+      {showArchive && !cyclesLoading && !visibleCycles.length && <section className="workspace-card"><h2>ארכיון שנים קודמות</h2><p>אין עדיין תהליכים משנים קודמות בארכיון.</p></section>}
+    </>}
     {session && selectedArea === 'placement_coordinator' && selectedCycleId && <nav className="role-navigation" aria-label="ניהול תהליך בחירה"><button className={coordinatorPage==='form'?'active':''} onClick={()=>void navigate(()=>setCoordinatorPage('form'))}>הגדרת התהליך וטופס הבחירה</button><button className={coordinatorPage==='workflow'?'active':''} onClick={()=>void navigate(()=>setCoordinatorPage('workflow'))}>שיבוץ, ערעורים ושליחה</button></nav>}
-    {session && selectedArea === 'placement_coordinator' && selectedCycleId && !creatingCycle && session.access.accessMode !== 'read_only' && <button type="button" className="secondary-action" onClick={() => void navigate(() => { setCreatingCycle(true); setSelectedCycleId(null) })}>יצירת תהליך בחירה חדש</button>}
-    {session && !cyclesLoading && !authError && selectedArea && !selectedCycleId && !['access_manager', 'placement_coordinator'].includes(selectedArea) && <section className="workspace-card"><h2>אין מחזור שיבוץ זמין</h2><p>כאשר ייפתח מחזור מתאים הוא יופיע כאן.</p></section>}
+    {session && selectedArea === 'placement_coordinator' && (selectedCycleId || showArchive) && !creatingCycle && session.access.accessMode !== 'read_only' && <button type="button" className="secondary-action" onClick={() => void navigate(() => { setCreatingCycle(true); setShowArchive(false); setSelectedCycleId(null) })}>יצירת תהליך בחירה חדש</button>}
+    {session && !cyclesLoading && !authError && selectedArea && !selectedCycleId && !showArchive && !['access_manager', 'placement_coordinator'].includes(selectedArea) && <section className="workspace-card"><h2>אין מחזור שיבוץ זמין</h2><p>כאשר ייפתח מחזור מתאים הוא יופיע כאן.</p></section>}
     {session && !cyclesLoading && !authError && selectedArea && (selectedCycleId || ['access_manager', 'course_instructor', 'placement_coordinator'].includes(selectedArea)) && <ReadOnlyContext.Provider value={session.access.accessMode === 'read_only'}><fieldset key={`${session.user.uid}-${selectedArea}-${selectedCycleId ?? "new"}`} className="workspace-boundary">
-      {selectedArea === 'placement_coordinator' && !selectedCycleId && <fieldset className="workspace-boundary" disabled={session.access.accessMode === 'read_only'}><CycleSetupWorkspace onChanged={refreshCycles} /></fieldset>}
+      {selectedArea === 'placement_coordinator' && !selectedCycleId && !showArchive && <fieldset className="workspace-boundary" disabled={session.access.accessMode === 'read_only'}><CycleSetupWorkspace onChanged={refreshCycles} /></fieldset>}
       {selectedArea === 'placement_coordinator' && selectedCycleId && coordinatorPage === 'form' && <fieldset className="workspace-boundary" disabled={session.access.accessMode === 'read_only'}><CycleSetupWorkspace readOnly={session.access.accessMode === 'read_only'} cycle={cycles.find((cycle) => cycle.id === selectedCycleId)} onChanged={refreshCycles} /></fieldset>}
       {selectedArea === 'student' && selectedCycleId && <fieldset className="workspace-boundary" disabled={session.access.accessMode === 'read_only'}><StudentPreferenceWorkspace cycleId={selectedCycleId} readOnly={session.access.accessMode === 'read_only'} /></fieldset>}
       {selectedArea === 'placement_coordinator' && selectedCycleId && coordinatorPage === 'workflow' && <CoordinatorWorkflowWorkspace cycleId={selectedCycleId} onCycleChanged={refreshCycles} />}
