@@ -10,7 +10,7 @@ import { nativFunctions } from '../infrastructure/firebase/client'
 
 export interface DemoAccount { label: string; email: string; password: string }
 export interface AccessUserSummary { uid: string; email?: string; displayName?: string; coreRole?: string; roles: RoleId[]; capabilities: CapabilityId[]; active: boolean }
-export interface NativSessionAccess { organizationId: string; roles: RoleId[]; capabilities: CapabilityId[]; accessMode: 'full' | 'read_only'; coreRole: string; displayName: string; email: string }
+export interface NativSessionAccess { organizationId: string; organizationName: string; organizationLogoPath: string; roles: RoleId[]; capabilities: CapabilityId[]; accessMode: 'full' | 'read_only'; coreRole: string; displayName: string; email: string }
 export interface GoogleAccessOption { id: string; name: string; role: string }
 
 function functionsClient() {
@@ -149,4 +149,8 @@ export async function listAccessUsers(): Promise<AccessUserSummary[]> {
 
 export async function setUserAccess(uid: string, roles: RoleId[], active: boolean): Promise<void> {
   await httpsCallable<Record<string, unknown>, unknown>(functionsClient(), 'setUserAccess')({ uid, roles, active })
+}
+
+export async function requestAccessCodeLogin(alias: string, code: string): Promise<string> {
+  return (await httpsCallable<{organizationId: string; alias: string; code: string}, {customToken: string}>(functionsClient(), 'loginWithAccessCode')({organizationId: import.meta.env.VITE_ORGANIZATION_ID || 'democratic-wizo', alias, code})).data.customToken
 }

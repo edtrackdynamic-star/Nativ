@@ -22,7 +22,7 @@ function validRoles(value: unknown): RoleId[] {
 
 export const getMyNativAccess = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request, 'read')
-  return { organizationId: actor.organizationId, roles: actor.roles, capabilities: actor.capabilities, accessMode: actor.accessMode, coreRole: actor.coreRole, displayName: actor.displayName, email: actor.email }
+  return { organizationId: actor.organizationId, organizationName: actor.organizationName, organizationLogoPath: actor.organizationLogoPath, roles: actor.roles, capabilities: actor.capabilities, accessMode: actor.accessMode, coreRole: actor.coreRole, displayName: actor.displayName, email: actor.email }
 })
 
 export const claimInitialAccessManager = onCall(callableOptions, async (request) => {

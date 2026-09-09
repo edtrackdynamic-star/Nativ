@@ -1,3 +1,4 @@
+import { getStorage } from 'firebase/storage'
 import { getApp, getApps, initializeApp } from 'firebase/app'
 import { connectAuthEmulator, getAuth } from 'firebase/auth'
 import { connectFunctionsEmulator, getFunctions } from 'firebase/functions'
@@ -13,6 +14,7 @@ const app = firebaseConfigured
   ? (getApps().length ? getApp() : initializeApp({ projectId, apiKey, authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || `${projectId}.firebaseapp.com`, appId: import.meta.env.VITE_FIREBASE_APP_ID || 'demo-nativ-local-app' }))
   : null
 
+export const nativStorage = app ? getStorage(app, `gs://${projectId}.firebasestorage.app`) : null
 export const nativAuth = app ? getAuth(app) : null
 export const nativFunctions = app ? getFunctions(app, 'europe-west1') : null
 

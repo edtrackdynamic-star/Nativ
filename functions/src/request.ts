@@ -48,6 +48,8 @@ export function subscriptionAccess(data: Record<string, unknown> | undefined, no
 }
 
 export interface ResolvedActor extends ActorContext {
+  organizationName: string
+  organizationLogoPath: string
   accessMode: AccessMode
   coreRole: string
   displayName: string
@@ -59,7 +61,7 @@ export async function actorFromRequest(request: CallableRequest, operation: 'rea
     const actor = actorFromAuth(request.auth)
     const coreRole = actor.roles.includes('student') ? 'student' : 'teacher'
     const roles = effectiveProductRoles(coreRole, actor.roles)
-    return { ...actor, roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], accessMode: 'full', coreRole, displayName: '', email: String(request.auth?.token.email ?? '') }
+    return { ...actor, organizationName: 'בית ספר לדוגמה', organizationLogoPath: '', roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], accessMode: 'full', coreRole, displayName: '', email: String(request.auth?.token.email ?? '') }
   }
   if (!request.auth) throw new HttpsError('unauthenticated', 'נדרשת כניסה למערכת')
   const organizationId = String(request.auth.token.organizationId ?? '').trim().toLowerCase()
@@ -86,6 +88,8 @@ export async function actorFromRequest(request: CallableRequest, operation: 'rea
   return {
     uid: request.auth.uid,
     organizationId,
+    organizationName: String(organizationData?.name ?? ''),
+    organizationLogoPath: String(organizationData?.branding?.logoPath ?? `organizations/${organizationId}/branding/logo.png`),
     roles,
     capabilities,
     accessMode,
