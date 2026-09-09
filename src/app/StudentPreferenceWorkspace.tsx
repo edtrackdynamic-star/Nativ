@@ -40,13 +40,14 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false }: Studen
         setContext(choiceContext)
         setCycle(loadedCycle)
         setWorkflow(loadedWorkflow)
-        const initialPreferences = draft?.preferences ?? latest?.preferences ?? choiceContext.catalog.clusters.map((cluster) => ({
+        const previousPreferences = draft?.preferences ?? latest?.preferences
+        const initialPreferences = choiceContext.catalog.clusters.map((cluster) => previousPreferences?.find(p => p.clusterId === cluster.clusterId) ?? ({
           clusterId: cluster.clusterId,
           rankings: Array.from({ length: cluster.requiredRankingCount }, (_, index) => ({ courseId: '', rank: index + 1 })),
         }))
         setPreferences(initialPreferences)
-        lastSavedSignature.current = JSON.stringify(initialPreferences)
-        setSavedSignature(JSON.stringify(initialPreferences))
+        lastSavedSignature.current = JSON.stringify(previousPreferences ?? initialPreferences)
+        setSavedSignature(JSON.stringify(previousPreferences ?? initialPreferences))
         draftVersionRef.current = draft?.version ?? 0
         setSubmissionCount(latest?.submissionVersion ?? 0)
         setMessage(loadedCycle.status === 'choice_open' ? (draft ? 'הטיוטה האחרונה נטענה.' : 'אפשר להתחיל לדרג. הטופס יישמר אוטומטית.') : 'טופס הבחירה המקורי נשמר לקריאה; מוצג גם מצב השיבוץ העדכני.')
@@ -63,7 +64,7 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false }: Studen
 
   useEffect(() => {
     const signature = JSON.stringify(preferences)
-    if (readOnly || !initialized.current || !context || cycle?.status !== 'choice_open' || saving || signature === lastSavedSignature.current || signature === failedSignature) return
+    if (readOnly || !initialized.current || !context?.catalog.clusters.length || cycle?.status !== 'choice_open' || saving || signature === lastSavedSignature.current || signature === failedSignature) return
     const timer = window.setTimeout(() => {
       if (busy.current || !alive.current) return
       busy.current = true
@@ -120,6 +121,8 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false }: Studen
       {cycle.status === 'appeals' && <div className="workflow-section"><h3>הגשת ערעור</h3><label className="rationale-field"><span>מקבץ</span><select value={appealDraft.clusterId} onChange={(event) => setAppealDraft({ clusterId: event.target.value, requestedCourseId: '', reason: appealDraft.reason })}><option value="">בחירת מקבץ</option>{assignments.map((assignment) => <option key={assignment.clusterId} value={assignment.clusterId}>{context.catalog.clusters.find((cluster) => cluster.clusterId === assignment.clusterId)?.label}</option>)}</select></label><label className="rationale-field"><span>הקורס המבוקש</span><select value={appealDraft.requestedCourseId} onChange={(event) => setAppealDraft({ ...appealDraft, requestedCourseId: event.target.value })}><option value="">בחירת קורס</option>{selectedCluster?.courses.filter((course) => course.courseId !== currentCourseId).map((course) => <option key={course.courseId} value={course.courseId}>{course.label}</option>)}</select></label><label className="rationale-field"><span>סיבת הערעור</span><textarea rows={3} value={appealDraft.reason} onChange={(event) => setAppealDraft({ ...appealDraft, reason: event.target.value })} /></label><button type="button" className="primary-action" disabled={appealPending || !appealDraft.clusterId || !appealDraft.requestedCourseId || !appealDraft.reason.trim()} onClick={() => void sendAppeal()}>הגשת ערעור</button>{workflow.appeals.map((appeal) => <p key={appeal.id}>{context.catalog.clusters.find((cluster) => cluster.clusterId === appeal.clusterId)?.label}: {{ submitted: 'נשלח לבדיקה', approved_pending_execution: 'אושר וממתין לביצוע', rejected: 'נדחה', executed: 'השינוי בוצע' }[appeal.status]}</p>)}</div>}
     </section>
   }
+
+  if (!context.catalog.clusters.length) return <section className="workspace-card"><h2>הבחירות שלי</h2><p>אין מקבצים פתוחים לכיתתך בתהליך הזה. לבדיקת שיוך הכיתה אפשר לפנות לרכז.</p></section>
 
   return (
     <section className="workspace-card" aria-label="טופס בחירה">

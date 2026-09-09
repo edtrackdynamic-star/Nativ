@@ -127,3 +127,26 @@ describe('NativCommandService preference commands', () => {
     })).rejects.toThrow(DomainValidationError)
   })
 })
+
+describe('class scoped choices', () => {
+  const restrictedCatalog = {...demoCatalogSnapshot,clusters:demoCatalogSnapshot.clusters.map((c,i)=>({...c,eligibleClassIds:[i===0?'a':'b']}))}
+  const actor={...student,studentClassId:'a'}
+  const base={organizationId:demoCycle.organizationId,cycleId:demoCycle.id,studentId:student.uid,occurredAt:'2026-09-09T12:00:00Z',idempotencyKey:'class-save',auditEventId:'class-audit'}
+  it('filters the catalog and rejects forged clusters or duplicate preferences', async()=>{
+    const service=new NativCommandService(new InMemoryNativRepository({cycles:[demoCycle],catalogSnapshots:[restrictedCatalog]}))
+    const context=await service.getChoiceContext(actor,demoCycle.id)
+    expect(context.catalog.clusters.map(c=>c.clusterId)).toEqual([restrictedCatalog.clusters[0].clusterId])
+    expect((await service.getChoiceContext(student,demoCycle.id)).catalog.clusters).toEqual([])
+    await expect(service.saveDraft(actor,{...base,draft:{...createDraft(),preferences:[{clusterId:'forged',rankings:[]}]},expectedVersion:0})).rejects.toThrow(DomainValidationError)
+    const preference={clusterId:restrictedCatalog.clusters[0].clusterId,rankings:[]}
+    await expect(service.saveDraft(actor,{...base,draft:{...createDraft(),preferences:[preference,preference]},expectedVersion:0})).rejects.toThrow(DomainValidationError)
+  })
+  it('requires a refreshed draft when the trusted class changes before submit',async()=>{
+    const service=new NativCommandService(new InMemoryNativRepository({cycles:[demoCycle],catalogSnapshots:[restrictedCatalog]}))
+    const draft=await service.saveDraft(actor,{...base,draft:{...createDraft(),preferences:createDraft().preferences.filter(p=>p.clusterId===restrictedCatalog.clusters[0].clusterId)},expectedVersion:0})
+    expect(draft.catalogSnapshot).toHaveLength(1)
+    await expect(service.submitPreferences({...actor,studentClassId:'b'},{...base,idempotencyKey:'submit-b',draftId:draft.id,expectedDraftVersion:draft.version,submittedSubmissionId:'submitted-b',submissionVersion:1})).rejects.toThrow(DomainValidationError)
+    const submitted=await service.submitPreferences(actor,{...base,idempotencyKey:'submit-a',auditEventId:'submit-audit',draftId:draft.id,expectedDraftVersion:draft.version,submittedSubmissionId:'submitted-a',submissionVersion:1})
+    expect(submitted.catalogSnapshot).toHaveLength(1)
+  })
+})

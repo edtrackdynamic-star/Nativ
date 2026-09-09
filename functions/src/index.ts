@@ -1,3 +1,4 @@
+import { eligibleClasses } from './classDirectory'
 import { parseFormDesign, safeLink } from '../../src/domain/formDesign'
 import { randomUUID } from 'node:crypto'
 import { getAuth } from 'firebase-admin/auth'
@@ -82,7 +83,7 @@ export const createCycle = onCall(callableOptions, async (request) => {
 })
 
 interface CatalogCourseInput { documentUrl?: string; imageUrl?: string; label: string; description?: string; subjectArea?: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: RepeatPolicy }
-interface CatalogClusterInput { description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass?: boolean; courses: CatalogCourseInput[] }
+interface CatalogClusterInput { eligibleClassIds?: string[]; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass?: boolean; courses: CatalogCourseInput[] }
 
 export const saveCycleCatalog = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request)
@@ -95,6 +96,10 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
   let formDesign: ReturnType<typeof parseFormDesign>
   try { formDesign = parseFormDesign(data.formDesign); for(const c of clusters) for(const course of c.courses){safeLink(course.documentUrl,true);safeLink(course.imageUrl)} }
   catch(error){throw new HttpsError('invalid-argument',error instanceof Error?error.message:'עיצוב הטופס אינו תקין')}
+  const availableClasses = new Set((await eligibleClasses(actor.organizationId)).map(c => c.id))
+  for (const cluster of clusters) {
+    if (cluster.eligibleClassIds !== undefined && (!Array.isArray(cluster.eligibleClassIds) || !cluster.eligibleClassIds.length || cluster.eligibleClassIds.some(id => typeof id !== 'string' || !availableClasses.has(id)))) throw new HttpsError('invalid-argument', 'יש לבחור לפחות כיתה פעילה אחת לכל מקבץ מוגבל, או לבחור בכל הכיתות')
+  }
   const teacherIds = [...new Set(clusters.flatMap(c=>c.courses.flatMap(course=>Array.isArray(course.instructorIds)?course.instructorIds:[])))]
   if(teacherIds.some(id=>typeof id!=='string' || !id || id.includes('/')))throw new HttpsError('invalid-argument','מזהה מנחה אינו תקין')
   const teachers = new Map<string,string>()
@@ -122,7 +127,7 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
       return { courseId, logicalCourseId: courseId, label: courseLabel, description:String(course.description??'').trim().slice(0,4000), documentUrl:safeLink(course.documentUrl,true), imageUrl:safeLink(course.imageUrl), instructorNames:instructorIds.map(id=>teachers.get(id)!) }
     })
     if(cluster.rationaleMode && !['optional','required','hidden'].includes(cluster.rationaleMode))throw new HttpsError('invalid-argument','מצב שדה ההסבר אינו תקין')
-    return { clusterId, label, description:String(cluster.description??'').slice(0,2000), rationaleMode:cluster.rationaleMode??'optional', requiredRankingCount: cluster.requiredRankingCount, balanceByClass: cluster.balanceByClass === true, courses: snapshotCourses }
+    return { clusterId, ...(cluster.eligibleClassIds === undefined ? {} : { eligibleClassIds: [...new Set(cluster.eligibleClassIds)] }), label, description:String(cluster.description??'').slice(0,2000), rationaleMode:cluster.rationaleMode??'optional', requiredRankingCount: cluster.requiredRankingCount, balanceByClass: cluster.balanceByClass === true, courses: snapshotCourses }
   })
   const catalog: CycleCatalogSnapshot = { ...base, id: `catalog-${cycleId}`, cycleId, formDesign, clusters: catalogClusters }
   return firestore.runTransaction(async (transaction) => {
@@ -137,6 +142,12 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
     transaction.create(firestore.collection(`organizations/${actor.organizationId}/nativAuditEvents`).doc(), { id: randomUUID(), organizationId: actor.organizationId, actorId: actor.uid, occurredAt: now, action: 'catalog.saved', entityType: 'AssignmentCycle', entityId: cycleId, reason: `שמירת ${catalogClusters.length} מקבצים ו-${courses.length} קורסים`, beforeVersion: cycle.version, afterVersion: cycle.version + 1 })
     return catalog
   })
+})
+
+export const listEligibleClasses = onCall(callableOptions, async (request) => {
+  const actor = await actorFromRequest(request, 'read')
+  if (!actor.capabilities.includes('nativ.assignment.manage')) throw new HttpsError('permission-denied', 'אין הרשאה לצפות ברשימת הכיתות')
+  return eligibleClasses(actor.organizationId)
 })
 
 export const listEligibleInstructors = onCall(callableOptions, async (request) => {

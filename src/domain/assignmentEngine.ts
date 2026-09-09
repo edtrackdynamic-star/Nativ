@@ -1,3 +1,4 @@
+import { includesClass } from './classEligibility'
 import type { Course } from './catalog'
 import type { ClusterPreference } from './preferences'
 
@@ -63,6 +64,7 @@ export function runDeterministicAssignment(input: {
   students: AssignmentStudent[]
   constraints?: HardConstraint[]
   balanceByClassClusterIds?: string[]
+  eligibleClassIdsByCluster?: Record<string, string[] | undefined>
 }): AssignmentRunResult {
   const assignments: AssignmentResult[] = []
   const warnings: string[] = []
@@ -70,6 +72,7 @@ export function runDeterministicAssignment(input: {
   const enrollmentByCourse: Record<string, number> = Object.fromEntries(input.courses.map((course) => [course.id, 0]))
 
   for (const clusterId of input.clusterIds) {
+    const students = input.students.filter(student => includesClass({ eligibleClassIds: input.eligibleClassIdsByCluster?.[clusterId] }, student.classId))
     const courses = input.courses.filter((course) => course.clusterId === clusterId && course.published)
     const assigned = new Set<string>()
     const constraints = input.constraints?.filter((constraint) => constraint.clusterId === clusterId) ?? []
@@ -87,13 +90,13 @@ export function runDeterministicAssignment(input: {
 
     const forced = constraints.filter((constraint) => constraint.type === 'must_assign').sort((left, right) => deterministicKey(`${clusterId}|forced|${left.studentId}`).localeCompare(deterministicKey(`${clusterId}|forced|${right.studentId}`)))
     for (const constraint of forced) {
-      const student = input.students.find((entry) => entry.studentId === constraint.studentId)
+      const student = students.find((entry) => entry.studentId === constraint.studentId)
       const course = courses.find((entry) => entry.id === constraint.courseId)
       if (!student || !course || !allowed(student, course) || enrollmentByCourse[course.id] >= course.capacity.maximum) throw new Error(`אילוץ חובה אינו ניתן לביצוע: ${constraint.studentId} / ${constraint.courseId}`)
       if (!assigned.has(student.studentId)) add(student, course, null, 'hard_constraint', `אילוץ קשיח: ${constraint.note}`)
     }
 
-    const submitters = input.students.filter((student) => student.submission?.preferences.some((preference) => preference.clusterId === clusterId))
+    const submitters = students.filter((student) => student.submission?.preferences.some((preference) => preference.clusterId === clusterId))
     const maxRank = Math.max(0, ...submitters.flatMap((student) => student.submission?.preferences.find((preference) => preference.clusterId === clusterId)?.rankings.map((ranking) => ranking.rank) ?? []))
     for (const phase of ['target', 'maximum'] as const) {
       for (let rank = 1; rank <= maxRank; rank += 1) {
@@ -123,7 +126,7 @@ export function runDeterministicAssignment(input: {
       if (course) add(student, course, null, 'fallback_submitter', 'שיבוץ משלים לאחר מיצוי הקורסים שדורגו')
       else warnings.push(`${student.displayLabel}: לא נמצא מקום פנוי במקבץ ${clusterId}`)
     }
-    const nonSubmitters = input.students.filter((student) => !submitters.includes(student)).sort((left, right) => deterministicKey(`${clusterId}|non-submitter|${left.studentId}`).localeCompare(deterministicKey(`${clusterId}|non-submitter|${right.studentId}`)))
+    const nonSubmitters = students.filter((student) => !submitters.includes(student)).sort((left, right) => deterministicKey(`${clusterId}|non-submitter|${left.studentId}`).localeCompare(deterministicKey(`${clusterId}|non-submitter|${right.studentId}`)))
     for (const student of nonSubmitters.filter((entry) => !assigned.has(entry.studentId))) {
       const course = chooseFallback(student, 'non-submitter')
       if (course) add(student, course, null, 'fallback_non_submitter', 'שיבוץ לאחר מתן קדימות למגישים')

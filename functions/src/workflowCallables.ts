@@ -1,3 +1,4 @@
+import { includesClass } from '../../src/domain/classEligibility'
 import { defineSecret } from 'firebase-functions/params'
 import { evaluateWithGemini, GEMINI_MODEL, sanitizeRationale } from '../../server/gemini/evaluation'
 import { createHash, randomUUID } from 'node:crypto'
@@ -239,7 +240,8 @@ export const runAssignment = onCall(callableOptions, async (request) => {
   const submissions = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission))
   const profiles = await studentAssignmentProfiles(actor.organizationId, submissions.map((submission) => submission.studentId))
   const students: AssignmentStudent[] = submissions.map((submission) => { const profile = profiles.get(submission.studentId); return { studentId: submission.studentId, displayLabel: profile?.displayLabel ?? 'תלמיד', classId: profile?.classId, classLabel: profile?.classLabel, submission, approvedAiByCluster: Object.fromEntries(workflow.aiEvaluations.filter((evaluation) => evaluation.studentId === submission.studentId && evaluation.approved).map((evaluation) => [evaluation.clusterId, evaluation.approved!.priority])) } })
-  const calculated = runDeterministicAssignment({ cycleId, clusterIds: [...new Set(courses.map((course) => course.clusterId))], courses, students, balanceByClassClusterIds: catalog?.clusters.filter((cluster) => cluster.balanceByClass).map((cluster) => cluster.clusterId) })
+  if (!catalog || courses.some(course=>!catalog.clusters.some(c=>c.clusterId===course.clusterId))) throw new HttpsError('failed-precondition', 'חסרות הגדרות מקבצים. יש לבדוק את התהליך לפני שיבוץ.')
+  const calculated = runDeterministicAssignment({ cycleId, clusterIds: [...new Set(courses.map((course) => course.clusterId))], courses, students, eligibleClassIdsByCluster: Object.fromEntries(catalog?.clusters.map(c => [c.clusterId, c.eligibleClassIds]) ?? []), balanceByClassClusterIds: catalog?.clusters.filter((cluster) => cluster.balanceByClass).map((cluster) => cluster.clusterId) })
   const result = { ...calculated, assignments: calculated.assignments.map((assignment) => ({ ...assignment, studentLabel: profiles.get(assignment.studentId)?.displayLabel ?? 'תלמיד', studentClassLabel: profiles.get(assignment.studentId)?.classLabel })) }
   const now = new Date().toISOString()
   return firestore.runTransaction(async (transaction) => {
@@ -329,6 +331,9 @@ export const submitAppeal = onCall(callableOptions, async (request) => {
   if (cycle?.status !== 'appeals') throw new HttpsError('failed-precondition', 'חלון הערעורים אינו פתוח')
   const requestedCourse = ((coursesSnapshot.data()?.courses ?? []) as Course[]).find((course) => course.id === requestedCourseId)
   if (!requestedCourse?.published || requestedCourse.clusterId !== clusterId) throw new HttpsError('failed-precondition', 'הקורס המבוקש אינו זמין במקבץ שנבחר')
+  const eligibilityCatalog = await firestore.doc(catalogSnapshotDocumentPath(actor.organizationId, cycleId)).get()
+  const eligibleCluster = (eligibilityCatalog.data() as CycleCatalogSnapshot | undefined)?.clusters.find(c=>c.clusterId===clusterId)
+  if (!eligibleCluster || !includesClass(eligibleCluster, actor.studentClassId)) throw new HttpsError('failed-precondition', 'המקבץ אינו פתוח לכיתתך. יש לפנות לרכז לבדיקת השיוך.')
   const original = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission))[0]
   const now = new Date().toISOString()
   return firestore.runTransaction(async (transaction) => {
@@ -450,6 +455,9 @@ export const executeAppealChange = onCall(callableOptions, async (request) => {
     if (workflow.version !== expectedWorkflowVersion) throw new HttpsError('aborted', 'המידע השתנה; יש לבצע ניתוח השפעה מחדש')
     const appeal = workflow.appeals.find((entry) => entry.id === appealId)
     if (appeal?.status !== 'approved_pending_execution' || !workflow.assignmentRun) throw new HttpsError('failed-precondition', 'השינוי אינו מאושר לביצוע')
+    const eligibilityCluster = (catalogSnapshot.data() as CycleCatalogSnapshot | undefined)?.clusters.find(c=>c.clusterId===appeal.clusterId)
+    const profile = (await studentAssignmentProfiles(actor.organizationId, [appeal.studentId])).get(appeal.studentId)
+    if (!eligibilityCluster || !includesClass(eligibilityCluster, profile?.classId)) throw new HttpsError('failed-precondition', 'כיתת התלמיד אינה משתתפת במקבץ. יש לבדוק את שיוך הכיתה לפני שינוי השיבוץ.')
     const fresh = analyze(workflow, appeal, courses, now)
     const nonCapacityViolations = fresh.constraintViolations.filter((violation) => !violation.includes('קיבולת המרבית'))
     if (nonCapacityViolations.length) throw new HttpsError('failed-precondition', 'השינוי מפר אילוץ שאינו ניתן לאישור במסלול זה', fresh)

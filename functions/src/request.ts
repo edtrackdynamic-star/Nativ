@@ -61,7 +61,7 @@ export async function actorFromRequest(request: CallableRequest, operation: 'rea
     const actor = actorFromAuth(request.auth)
     const coreRole = actor.roles.includes('student') ? 'student' : 'teacher'
     const roles = effectiveProductRoles(coreRole, actor.roles)
-    return { ...actor, organizationName: 'בית ספר לדוגמה', organizationLogoPath: '', roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], accessMode: 'full', coreRole, displayName: '', email: String(request.auth?.token.email ?? '') }
+    return { ...actor, studentClassId: String(request.auth?.token.classId ?? ''), organizationName: 'בית ספר לדוגמה', organizationLogoPath: '', roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], accessMode: 'full', coreRole, displayName: '', email: String(request.auth?.token.email ?? '') }
   }
   if (!request.auth) throw new HttpsError('unauthenticated', 'נדרשת כניסה למערכת')
   const organizationId = String(request.auth.token.organizationId ?? '').trim().toLowerCase()
@@ -85,7 +85,9 @@ export async function actorFromRequest(request: CallableRequest, operation: 'rea
   const assignedRoles = accessData?.active === false ? [] : allowedValues<RoleId>(accessData?.roles, roleIds)
   const roles = effectiveProductRoles(String(membershipData?.role ?? ''), assignedRoles, accessData?.active !== false)
   const capabilities = [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))]
+  const studentProfile = roles.includes('student') ? await coreFirestore.doc(`organizations/${organizationId}/students/${request.auth.uid}`).get() : undefined
   return {
+    studentClassId: String(studentProfile?.data()?.classId ?? membershipData?.classIds?.[0] ?? ''),
     uid: request.auth.uid,
     organizationId,
     organizationName: String(organizationData?.name ?? ''),

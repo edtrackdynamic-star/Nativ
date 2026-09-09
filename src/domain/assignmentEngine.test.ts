@@ -48,3 +48,17 @@ describe('runDeterministicAssignment', () => {
     }
   })
 })
+
+it('excludes other classes from ranked and fallback assignments and rejects a forced override', () => {
+  const input = {cycleId:'cycle',clusterIds:['cluster'],courses:[course('a',10,10)],eligibleClassIdsByCluster:{cluster:['a']},students:[
+    {...student('eligible','a','neutral'),classId:'a'},
+    {...student('ineligible','a','high'),classId:'b'},
+    {studentId:'fallback',displayLabel:'fallback',classId:'b'},
+    {studentId:'unknown',displayLabel:'unknown'},
+    {studentId:'eligible-fallback',displayLabel:'eligible-fallback',classId:'a'},
+  ]}
+  const result=runDeterministicAssignment(input)
+  expect(result.assignments.map(a=>a.studentId).sort()).toEqual(['eligible','eligible-fallback'])
+  expect(result.warnings).toEqual([])
+  expect(()=>runDeterministicAssignment({...input,constraints:[{studentId:'ineligible',clusterId:'cluster',courseId:'a',type:'must_assign',note:'override'}]})).toThrow()
+})

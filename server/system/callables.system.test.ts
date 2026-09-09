@@ -1,3 +1,5 @@
+import { getAuth as getAdminAuth } from 'firebase-admin/auth'
+import type { ChoiceContext } from '../../src/application/NativCommandService'
 import { deleteApp, initializeApp, type FirebaseApp } from 'firebase/app'
 import { connectAuthEmulator, getAuth, signInWithEmailAndPassword, signOut, type Auth } from 'firebase/auth'
 import { connectFunctionsEmulator, getFunctions, httpsCallable, type Functions } from 'firebase/functions'
@@ -311,4 +313,49 @@ describe('Nativ callable system flow', () => {
     const instructorWorkspace = (await getInstructorWorkspace({ cycleId: demoCycle.id })).data
     expect(instructorWorkspace.courses.some((course) => course.label === 'תיאטרון')).toBe(true)
   })
+  it('enforces per-cluster classes across catalog, draft, submit and assignment', async () => {
+    const call = async <T,>(name:string,data:Record<string,unknown>={}) => (await httpsCallable<Record<string,unknown>,T>(functions,name)(data)).data
+    const coordinator=accounts.find(a=>a.label==='רכז שיבוץ')!
+    const student=accounts.find(a=>a.label==='תלמיד')!
+    await signOut(auth);await signInWithEmailAndPassword(auth,coordinator.email,coordinator.password)
+    const classes=await call<Array<{id:string}>>('listEligibleClasses')
+    expect(classes.map(c=>c.id)).toEqual(['class-demo-7a','class-demo-7b'])
+    let cycle=await call<AssignmentCycle>('createCycle',{schoolYear:'test',termLabel:'כיתות במקבצים'})
+    const teachers=await call<Array<{uid:string}>>('listEligibleInstructors')
+    const course={label:'קורס',instructorIds:[teachers[0].uid],minimum:0,target:10,maximum:20,repeatPolicy:'allowed'}
+    const clusters=[{label:'ז1 בלבד',eligibleClassIds:['class-demo-7a'],requiredRankingCount:1,courses:[course]},{label:'ז2 בלבד',eligibleClassIds:['class-demo-7b'],requiredRankingCount:1,courses:[course]},{label:'כולם',requiredRankingCount:1,courses:[course]}]
+    for(const invalid of [[],['another-school-class']]) await expect(call('saveCycleCatalog',{cycleId:cycle.id,clusters:[{...clusters[0],eligibleClassIds:invalid}]})).rejects.toMatchObject({code:'functions/invalid-argument'})
+    const catalog=await call<ChoiceContext['catalog']>('saveCycleCatalog',{cycleId:cycle.id,expectedVersion:cycle.version,clusters})
+    cycle=await call<AssignmentCycle>('getCycle',{cycleId:cycle.id})
+    cycle=await call<AssignmentCycle>('transitionCycle',{cycleId:cycle.id,expectedVersion:cycle.version,to:'choice_open',reason:'test',idempotencyKey:'class-open'})
+    await expect(call('saveCycleCatalog',{cycleId:cycle.id,clusters})).rejects.toMatchObject({code:'functions/failed-precondition'})
+    await signOut(auth);await signInWithEmailAndPassword(auth,student.email,student.password)
+    await expect(call('listEligibleClasses')).rejects.toMatchObject({code:'functions/permission-denied'})
+    const context=await call<ChoiceContext>('getChoiceContext',{cycleId:cycle.id})
+    expect(context.catalog.clusters.map(c=>c.label)).toEqual(['ז1 בלבד','כולם'])
+    const preferences=context.catalog.clusters.map(c=>({clusterId:c.clusterId,rankings:[{courseId:c.courses[0].courseId,rank:1}]}))
+    await expect(call('savePreferenceDraft',{cycleId:cycle.id,expectedVersion:0,idempotencyKey:'forged-class',preferences:[...preferences,{clusterId:catalog.clusters[1].clusterId,rankings:[]}],classId:'class-demo-7b'})).rejects.toMatchObject({code:'functions/failed-precondition'})
+    const draft=await call<PreferenceSubmission>('savePreferenceDraft',{cycleId:cycle.id,expectedVersion:0,idempotencyKey:'class-draft',preferences})
+    const user=await getAdminAuth(adminApp).getUser(auth.currentUser!.uid)
+    try {
+      await getAdminAuth(adminApp).setCustomUserClaims(user.uid,{...user.customClaims,classId:'class-demo-7b'})
+      await auth.currentUser!.getIdToken(true)
+      expect((await call<ChoiceContext>('getChoiceContext',{cycleId:cycle.id})).catalog.clusters.map(c=>c.label)).toEqual(['ז2 בלבד','כולם'])
+      await expect(call('submitPreferences',{cycleId:cycle.id,expectedDraftVersion:draft.version,submissionVersion:1,idempotencyKey:'class-moved-submit'})).rejects.toMatchObject({code:'functions/failed-precondition'})
+    } finally {
+      await getAdminAuth(adminApp).setCustomUserClaims(user.uid,user.customClaims!)
+      await auth.currentUser!.getIdToken(true)
+    }
+    const submitted=await call<PreferenceSubmission>('submitPreferences',{cycleId:cycle.id,expectedDraftVersion:draft.version,submissionVersion:1,idempotencyKey:'class-valid-submit'})
+    expect(submitted.catalogSnapshot).toHaveLength(2)
+    await signOut(auth);await signInWithEmailAndPassword(auth,coordinator.email,coordinator.password)
+    cycle=await call<AssignmentCycle>('transitionCycle',{cycleId:cycle.id,expectedVersion:cycle.version,to:'choice_closed',reason:'test',idempotencyKey:'class-close'})
+    let workflow=await call<WorkflowState>('generateAiEvaluations',{cycleId:cycle.id})
+    for(const evaluation of workflow.aiEvaluations) workflow=await call<WorkflowState>('approveAiEvaluation',{cycleId:cycle.id,evaluationId:evaluation.id,priority:'neutral',summary:'test',reason:'test'})
+    cycle=await call<AssignmentCycle>('getCycle',{cycleId:cycle.id})
+    await call('transitionCycle',{cycleId:cycle.id,expectedVersion:cycle.version,to:'assignment',reason:'test',idempotencyKey:'class-assign'})
+    workflow=await call<WorkflowState>('runAssignment',{cycleId:cycle.id})
+    expect(workflow.assignmentRun!.assignments.map(a=>a.clusterId).sort()).toEqual(context.catalog.clusters.map(c=>c.clusterId).sort())
+  })
+
 })

@@ -14,7 +14,7 @@ export const accessRoles: AccessRole[] = [
 export const capabilityIds = ['nativ.access.manage', 'nativ.assignment.view', 'nativ.assignment.manage', 'nativ.assignment.publish', 'nativ.ai.review', 'nativ.appeal.review', 'nativ.appeal.decide', 'nativ.capacity.override.approve', 'nativ.audit.view'] as const
 export type CapabilityId = (typeof capabilityIds)[number]
 
-export interface ActorContext { uid: string; organizationId: string; roles: RoleId[]; capabilities: CapabilityId[] }
+export interface ActorContext { studentClassId?: string; uid: string; organizationId: string; roles: RoleId[]; capabilities: CapabilityId[] }
 
 export function hasCapability(actor: ActorContext, capability: CapabilityId): boolean {
   return actor.capabilities.includes(capability)

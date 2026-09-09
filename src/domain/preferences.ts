@@ -15,6 +15,7 @@ export interface CourseSnapshot {
 }
 
 export interface ClusterSnapshot {
+  eligibleClassIds?: string[]
   description?: string
   rationaleMode?: 'optional' | 'required' | 'hidden'
   clusterId: string

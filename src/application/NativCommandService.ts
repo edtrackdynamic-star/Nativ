@@ -1,3 +1,4 @@
+import { includesClass } from '../domain/classEligibility'
 import type { ActorContext } from '../domain/access'
 import type { CycleCatalogSnapshot } from '../domain/catalog'
 import { transitionCycle as applyCycleTransition, type AssignmentCycle, type CycleStatus } from '../domain/cycle'
@@ -75,7 +76,7 @@ export class NativCommandService {
       const cycle = await requireCycle(transaction, actor.organizationId, cycleId)
       const catalog = await transaction.getCatalogSnapshot(actor.organizationId, cycleId)
       if (!catalog) throw new EntityNotFoundError('צילום קטלוג', cycleId)
-      return { cycle, catalog }
+      return { cycle, catalog: actor.roles.includes('student') && cycle.status === 'choice_open' ? { ...catalog, clusters: catalog.clusters.filter(cluster => includesClass(cluster, actor.studentClassId)) } : catalog }
     })
   }
 
@@ -133,12 +134,16 @@ export class NativCommandService {
       }
       const catalogSnapshot = await transaction.getCatalogSnapshot(input.organizationId, input.cycleId)
       if (!catalogSnapshot) throw new EntityNotFoundError('צילום קטלוג', input.cycleId)
+      const eligibleClusters = catalogSnapshot.clusters.filter(cluster => includesClass(cluster, actor.uid === input.studentId ? actor.studentClassId : undefined))
+      if (!eligibleClusters.length || input.draft.preferences.some(preference => !eligibleClusters.some(cluster => cluster.clusterId === preference.clusterId)) || new Set(input.draft.preferences.map(p => p.clusterId)).size !== input.draft.preferences.length) {
+        throw new DomainValidationError([{ code: 'draft.class_scope', message: 'המקבצים אינם תואמים לכיתת התלמיד. יש לרענן את הטופס ולנסות שוב.', severity: 'error' }])
+      }
       const existing = await transaction.getSubmission(input.organizationId, input.draft.id)
       const savedDraft: PreferenceSubmission = {
         ...input.draft,
         status: 'draft',
         submittedAt: undefined,
-        catalogSnapshot: structuredClone(catalogSnapshot.clusters),
+        catalogSnapshot: structuredClone(eligibleClusters),
         version: input.expectedVersion + 1,
         createdAt: existing?.createdAt ?? input.occurredAt,
         createdBy: existing?.createdBy ?? actor.uid,
@@ -177,8 +182,16 @@ export class NativCommandService {
         throw new DomainValidationError([{ code: 'submission.scope_mismatch', message: 'הטיוטה אינה שייכת לתלמיד או למחזור', severity: 'error' }])
       }
 
+      const catalog = await transaction.getCatalogSnapshot(input.organizationId, input.cycleId)
+      if (!catalog) throw new EntityNotFoundError('צילום קטלוג', input.cycleId)
+      const eligibleClusters = catalog.clusters.filter(cluster => includesClass(cluster, actor.uid === input.studentId ? actor.studentClassId : undefined))
+      const ids = eligibleClusters.map(c => c.clusterId)
+      if (!ids.length || ids.length !== draft.catalogSnapshot.length || draft.catalogSnapshot.some(c => !ids.includes(c.clusterId)) || draft.preferences.some(p => !ids.includes(p.clusterId))) {
+        throw new DomainValidationError([{ code: 'submission.class_changed', message: 'שיוך הכיתה השתנה. יש לרענן את הטופס ולשמור את הבחירות מחדש.', severity: 'error' }])
+      }
       const submitted: PreferenceSubmission = {
         ...draft,
+        catalogSnapshot: structuredClone(eligibleClusters),
         id: input.submittedSubmissionId,
         version: 1,
         submissionVersion: input.submissionVersion,
