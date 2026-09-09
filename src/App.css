@@ -258,3 +258,12 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .setup-course .workspace-actions button,.setup-cluster .workspace-heading button { padding:8px 12px; border:1px solid var(--line); border-radius:10px; background:#f8fafc; color:var(--ink-strong); cursor:pointer; }
 .student-preview.mobile .course-options { grid-template-columns:1fr; }
 @media(max-width:560px){.choice-form-header,.choice-cluster{padding:16px}.editor-save{flex-wrap:wrap;bottom:4px}.editor-save button{width:100%}.course-options{grid-template-columns:1fr}.form-submit{width:100%}}
+
+.instructor-search, .table-import { min-width: 0; border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-block: 12px; }
+.table-import summary { cursor: pointer; font-weight: 800; padding-block: 8px; }
+.table-import > label { display: grid; gap: 8px; margin-block: 12px; }
+.table-import textarea { width: 100%; box-sizing: border-box; }
+.instructor-search input { width: 100%; box-sizing: border-box; }
+.instructor-results { display: grid; max-height: 220px; overflow: auto; gap: 6px; margin-top: 8px; }
+.instructor-results button { text-align: start; min-height: 44px; overflow-wrap: anywhere; }
+.table-import .setup-course { overflow-wrap: anywhere; }
