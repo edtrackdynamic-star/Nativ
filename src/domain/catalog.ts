@@ -15,6 +15,7 @@ export interface Cluster extends VersionedEntity {
 }
 
 export interface CourseCapacity {
+  limit?: number
   minimum: number
   target: number
   maximum: number

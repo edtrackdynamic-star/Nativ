@@ -268,7 +268,7 @@ describe('Nativ callable system flow', () => {
       expectedVersion:created.version,
       formDesign:{title:'בוחרים ביחד',theme:'teal',layout:'list'},
       clusters: [{
-        label: 'אמנויות',
+        label: 'אמנויות', capacityFlexibility: 4,
         description:'בחרו את הקורס המועדף',rationaleMode:'required',
         requiredRankingCount: 1,
         courses: [{
@@ -278,7 +278,7 @@ describe('Nativ callable system flow', () => {
           instructorIds: [instructors[0].uid],
           minimum: 0,
           target: 18,
-          maximum: 22,
+          maximum: 22, capacityLimit: 22,
           repeatPolicy: 'allowed',
         }],
       }],
@@ -290,6 +290,9 @@ describe('Nativ callable system flow', () => {
     expect(catalog.catalog.clusters[0]).toMatchObject({ balanceByClass: false,rationaleMode:'required',description:'בחרו את הקורס המועדף' })
     expect(catalog.catalog).toMatchObject({formDesign:{title:'בוחרים ביחד',theme:'teal'}})
     expect(catalog.courses).toHaveLength(1)
+    expect(catalog.courses[0]).toMatchObject({capacity:{limit:22,maximum:22}})
+    expect(catalog.catalog.clusters[0]).toMatchObject({capacityFlexibility:4})
+    await expect(saveCatalog({cycleId:created.id,clusters:[{label:'x',requiredRankingCount:1,courses:[{label:'x',instructorIds:[instructors[0].uid],minimum:0,target:5,maximum:10,capacityLimit:8,repeatPolicy:'allowed'}]}]})).rejects.toMatchObject({code:'functions/invalid-argument'})
 
     const listCycles = httpsCallable<undefined, AssignmentCycle[]>(functions, 'listCycles')
     expect((await listCycles()).data.some((cycle) => cycle.id === created.id)).toBe(true)

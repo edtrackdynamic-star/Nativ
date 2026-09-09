@@ -1,3 +1,5 @@
+import { CapacityPlanner } from './CapacityPlanner'
+import type { StudentRosterEntry } from '../domain/studentRoster'
 import { CourseTableImport } from './CourseTableImport'
 import { InstructorPicker } from './InstructorPicker'
 import { capacityError } from '../domain/tablePaste'
@@ -9,7 +11,7 @@ import type { ClusterSnapshot, ClusterPreference } from '../domain/preferences'
 import { defaultFormDesign, parseFormDesign, safeLink, type FormDesign } from '../domain/formDesign'
 import { includesClass } from '../domain/classEligibility'
 import { ChoiceForm } from './ChoiceForm'
-import { createCycle, getCycleCatalog, listEligibleClasses, listEligibleInstructors, saveCycleCatalog, type CatalogClusterDraft, type CatalogCourseDraft } from './firebaseApi'
+import { createCycle, getStudentRoster, getCycleCatalog, listEligibleClasses, listEligibleInstructors, saveCycleCatalog, type CatalogClusterDraft, type CatalogCourseDraft } from './firebaseApi'
 
 type CourseEdit = Omit<CatalogCourseDraft, 'minimum' | 'target' | 'maximum'> & { minimum: number | string; target: number | string; maximum: number | string }
 type ClusterEdit = Omit<CatalogClusterDraft, 'courses' | 'requiredRankingCount'> & { courses: CourseEdit[]; requiredRankingCount: number | string }
@@ -23,6 +25,7 @@ export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cy
   const [initialSchoolYear]=useState(()=>schoolYearId(currentSchoolYearStart())); const [schoolYear,setSchoolYear]=useState(initialSchoolYear); const [termLabel,setTermLabel]=useState('')
   const [clusters,setClusters]=useState<ClusterEdit[]>([emptyCluster()])
   const [design,setDesign]=useState<FormDesign>(defaultFormDesign)
+  const [rosterResult,setRoster]=useState<{cycleId:string;students:StudentRosterEntry[]}|null>(null)
   const [classes,setClasses]=useState<Array<{id:string;name:string}>>([])
   const [previewClass,setPreviewClass]=useState('*')
   const [instructors,setInstructors]=useState<Array<{uid:string;displayName:string}>>([])
@@ -36,12 +39,14 @@ export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cy
   const signature=JSON.stringify({clusters,design})
   useUnsavedChanges(!locked && (cycle ? loaded && signature!==savedSignature : Boolean(schoolYear!==initialSchoolYear || termLabel)))
   const cycleId=cycle?.id
+  const roster=rosterResult?.cycleId===cycleId?rosterResult?.students??null:null
   useEffect(()=>{ if(!cycleId)return;let active=true;void Promise.all([listEligibleInstructors(),getCycleCatalog(cycleId),listEligibleClasses()]).then(([teachers,data,schoolClasses])=>{
     if(!active)return;setInstructors(teachers);setClasses(schoolClasses)
-    const next=data.catalog?.clusters.length ? data.catalog.clusters.map(cluster=>({...(cluster.eligibleClassIds===undefined?{}:{eligibleClassIds:cluster.eligibleClassIds}),label:cluster.label,description:cluster.description??'',rationaleMode:cluster.rationaleMode??'optional',requiredRankingCount:cluster.requiredRankingCount,balanceByClass:cluster.balanceByClass===true,courses:data.courses.filter(course=>course.clusterId===cluster.clusterId).map(course=>({label:course.label,description:course.description,documentUrl:course.documentUrl??'',imageUrl:course.imageUrl??'',subjectArea:course.subjectArea,instructorIds:course.instructorIds,minimum:course.capacity.minimum,target:course.capacity.target,maximum:course.capacity.maximum,repeatPolicy:course.repeatPolicy}))})) : [emptyCluster()]
+    const next=data.catalog?.clusters.length ? data.catalog.clusters.map(cluster=>({...(cluster.eligibleClassIds===undefined?{}:{eligibleClassIds:cluster.eligibleClassIds}),...(cluster.capacityFlexibility===undefined?{}:{capacityFlexibility:cluster.capacityFlexibility}),label:cluster.label,description:cluster.description??'',rationaleMode:cluster.rationaleMode??'optional',requiredRankingCount:cluster.requiredRankingCount,balanceByClass:cluster.balanceByClass===true,courses:data.courses.filter(course=>course.clusterId===cluster.clusterId).map(course=>({...(course.capacity.limit===undefined?{}:{capacityLimit:course.capacity.limit}),label:course.label,description:course.description,documentUrl:course.documentUrl??'',imageUrl:course.imageUrl??'',subjectArea:course.subjectArea,instructorIds:course.instructorIds,minimum:course.capacity.minimum,target:course.capacity.target,maximum:course.capacity.maximum,repeatPolicy:course.repeatPolicy}))})) : [emptyCluster()]
     const form={...defaultFormDesign,...data.catalog?.formDesign};setClusters(next);setDesign(form);setSavedSignature(JSON.stringify({clusters:next,design:form}));setLoaded(true)
   }).catch(()=>{if(active)setMessage('לא ניתן לטעון את הגדרות התהליך. נסו לפתוח אותו מחדש.')});return()=>{active=false}
   },[cycleId])
+  useEffect(()=>{if(!cycleId)return;let active=true;void getStudentRoster(cycleId).then(values=>{if(active)setRoster({cycleId,students:values})}).catch(()=>{if(active)setRoster(null)});return()=>{active=false}},[cycleId])
   async function create(){if(pending)return;try{setPending(true);const created=await createCycle(schoolYear.trim(),termLabel.trim());await onChanged(created.id)}catch(error){setMessage(error instanceof Error?error.message:'יצירת התהליך נכשלה')}finally{setPending(false)}}
   function updateCluster(index:number,patch:Partial<ClusterEdit>){setClusters(items=>items.map((item,i)=>{if(i!==index)return item;const next={...item,...patch};if(next.eligibleClassIds===undefined)delete next.eligibleClassIds;return next}))}
   function updateCourse(ci:number,ti:number,patch:Partial<CourseEdit>){updateCluster(ci,{courses:clusters[ci].courses.map((item,i)=>i===ti?{...item,...patch}:item)})}
@@ -85,6 +90,7 @@ export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cy
         {cluster.eligibleClassIds?.filter(id=>!classes.some(c=>c.id===id)).map(id=><label key={id}><input type="checkbox" checked onChange={()=>updateCluster(ci,{eligibleClassIds:cluster.eligibleClassIds?.filter(value=>value!==id)})}/>כיתה שאינה פעילה ({id})</label>)}
         {cluster.eligibleClassIds?.length===0 && <p role="alert">יש לבחור כיתה אחת לפחות או לבחור בכל הכיתות.</p>}
       </fieldset>
+      <CapacityPlanner key={JSON.stringify([cluster.courses.map(c=>[c.label,c.capacityLimit,c.minimum,c.target,c.maximum]),cluster.capacityFlexibility])} students={roster===null?null:roster.filter(student=>includesClass(cluster,student.classId)).length} courses={cluster.courses} initialFlexibility={cluster.capacityFlexibility} onApply={(values,flexibility)=>updateCluster(ci,{capacityFlexibility:flexibility,courses:cluster.courses.map((course,i)=>{const next={...course,...values[i]};if(values[i].capacityLimit===undefined)delete next.capacityLimit;return next})})}/>
       <CourseTableImport instructors={instructors} clusterName={cluster.label} existingCourses={cluster.courses} onAdd={added=>updateCluster(ci,{courses:[...cluster.courses,...added]})}/>
       <label className="setup-option"><input type="checkbox" checked={cluster.balanceByClass} onChange={e=>updateCluster(ci,{balanceByClass:e.target.checked})}/>איזון לפי כיתת מקור</label>
       {cluster.courses.map((course,ti)=><section className="setup-course" key={ti}><h4>קורס {ti+1}</h4><div className="setup-grid">
@@ -94,7 +100,6 @@ export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cy
         <label>מסמך Google Docs עם תכני הקורס<input type="url" value={course.documentUrl??''} onChange={e=>updateCourse(ci,ti,{documentUrl:e.target.value})}/></label>
         <label>קישור לתמונת הקורס<input type="url" value={course.imageUrl??''} onChange={e=>updateCourse(ci,ti,{imageUrl:e.target.value})}/></label>
         <InstructorPicker instructors={instructors} selected={course.instructorIds} onChange={ids=>updateCourse(ci,ti,{instructorIds:ids})}/>
-        {(['minimum','target','maximum'] as const).map((field,i)=><label key={field}>{['מינימום תלמידים','יעד תלמידים','מקסימום תלמידים'][i]}<input type="number" min={field==='maximum'?1:0} value={course[field]} onChange={e=>updateCourse(ci,ti,{[field]:e.target.value})}/></label>)}
         <label>חזרה על הקורס<select value={course.repeatPolicy} onChange={e=>updateCourse(ci,ti,{repeatPolicy:e.target.value as CatalogCourseDraft['repeatPolicy']})}><option value="allowed">מותרת</option><option value="approval_required">דורשת אישור</option><option value="discouraged">לא מומלצת</option><option value="prohibited">אסורה</option></select></label>
       </div><div className="workspace-actions"><button type="button" disabled={ti===0} onClick={()=>updateCluster(ci,{courses:move(cluster.courses,ti,-1)})}>הזזת קורס למעלה</button><button type="button" disabled={ti===cluster.courses.length-1} onClick={()=>updateCluster(ci,{courses:move(cluster.courses,ti,1)})}>הזזת קורס למטה</button>{cluster.courses.length>1 && <button type="button" onClick={async()=>{if(await confirm('להסיר את הקורס?'))updateCluster(ci,{courses:cluster.courses.filter((_,i)=>i!==ti),requiredRankingCount:Math.min(Number(cluster.requiredRankingCount),cluster.courses.length-1)})}}>הסרת קורס</button>}</div></section>)}
       <div className="workspace-actions"><button type="button" className="secondary-action" onClick={()=>updateCluster(ci,{courses:[...cluster.courses,emptyCourse()]})}>הוספת קורס</button>{clusters.length>1 && <button type="button" className="text-action" onClick={async()=>{if(await confirm('להסיר את המקבץ והקורסים שבתוכו?'))setClusters(clusters.filter((_,i)=>i!==ci))}}>הסרת מקבץ</button>}</div>

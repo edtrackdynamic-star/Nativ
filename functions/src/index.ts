@@ -84,8 +84,8 @@ export const createCycle = onCall(callableOptions, async (request) => {
   return cycle
 })
 
-interface CatalogCourseInput { documentUrl?: string; imageUrl?: string; label: string; description?: string; subjectArea?: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: RepeatPolicy }
-interface CatalogClusterInput { eligibleClassIds?: string[]; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass?: boolean; courses: CatalogCourseInput[] }
+interface CatalogCourseInput { capacityLimit?: number; documentUrl?: string; imageUrl?: string; label: string; description?: string; subjectArea?: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: RepeatPolicy }
+interface CatalogClusterInput { capacityFlexibility?: number; eligibleClassIds?: string[]; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass?: boolean; courses: CatalogCourseInput[] }
 
 export const saveCycleCatalog = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request)
@@ -118,18 +118,20 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
     const label = typeof cluster.label === 'string' ? cluster.label.trim() : ''
     if (!label || !Number.isInteger(cluster.requiredRankingCount) || cluster.requiredRankingCount<1 || !Array.isArray(cluster.courses) || cluster.courses.length < cluster.requiredRankingCount) throw new HttpsError('invalid-argument', 'יש להשלים את שם המקבץ ומספר הקורסים לדירוג')
     const clusterId = `cluster-${randomUUID()}`
+    if (cluster.capacityFlexibility !== undefined && (!Number.isSafeInteger(cluster.capacityFlexibility) || cluster.capacityFlexibility < 0)) throw new HttpsError('invalid-argument', 'גמישות הקיבולת אינה תקינה')
     const snapshotCourses = cluster.courses.map((course) => {
+      if (course.capacityLimit !== undefined && (!Number.isSafeInteger(course.capacityLimit) || course.capacityLimit < 1 || course.maximum > course.capacityLimit)) throw new HttpsError('invalid-argument', 'המכסה חייבת להיות חיובית ולא קטנה מהמספר המרבי')
       const courseLabel = typeof course.label === 'string' ? course.label.trim() : ''
       const instructorIds = Array.isArray(course.instructorIds) ? course.instructorIds.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())) : []
       if (!courseLabel || !instructorIds.length || ![course.minimum, course.target, course.maximum].every(Number.isInteger) || course.minimum < 0 || course.minimum > course.target || course.target > course.maximum) throw new HttpsError('invalid-argument', `יש להשלים מנחה וקיבולת תקינה בקורס ${courseLabel || 'ללא שם'}`)
       if (!['allowed', 'approval_required', 'discouraged', 'prohibited'].includes(course.repeatPolicy)) throw new HttpsError('invalid-argument', 'מדיניות החזרה אינה תקינה')
       if(course.maximum<1)throw new HttpsError('invalid-argument','מקסימום התלמידים חייב להיות חיובי')
       const courseId = `course-${randomUUID()}`
-      courses.push({ ...base, id: courseId, cycleId, clusterId, logicalCourseId: courseId, label: courseLabel, description: String(course.description ?? '').trim().slice(0,4000), documentUrl:safeLink(course.documentUrl,true), imageUrl:safeLink(course.imageUrl), subjectArea: String(course.subjectArea ?? '').trim(), instructorIds, slot: `slot-${clusterIndex + 1}`, eligibleGradeIds: [], capacity: { minimum: course.minimum, target: course.target, maximum: course.maximum }, repeatPolicy: course.repeatPolicy, published: true })
+      courses.push({ ...base, id: courseId, cycleId, clusterId, logicalCourseId: courseId, label: courseLabel, description: String(course.description ?? '').trim().slice(0,4000), documentUrl:safeLink(course.documentUrl,true), imageUrl:safeLink(course.imageUrl), subjectArea: String(course.subjectArea ?? '').trim(), instructorIds, slot: `slot-${clusterIndex + 1}`, eligibleGradeIds: [], capacity: { ...(course.capacityLimit === undefined ? {} : {limit: course.capacityLimit}), minimum: course.minimum, target: course.target, maximum: course.maximum }, repeatPolicy: course.repeatPolicy, published: true })
       return { courseId, logicalCourseId: courseId, label: courseLabel, description:String(course.description??'').trim().slice(0,4000), documentUrl:safeLink(course.documentUrl,true), imageUrl:safeLink(course.imageUrl), instructorNames:instructorIds.map(id=>teachers.get(id)!) }
     })
     if(cluster.rationaleMode && !['optional','required','hidden'].includes(cluster.rationaleMode))throw new HttpsError('invalid-argument','מצב שדה ההסבר אינו תקין')
-    return { clusterId, ...(cluster.eligibleClassIds === undefined ? {} : { eligibleClassIds: [...new Set(cluster.eligibleClassIds)] }), label, description:String(cluster.description??'').slice(0,2000), rationaleMode:cluster.rationaleMode??'optional', requiredRankingCount: cluster.requiredRankingCount, balanceByClass: cluster.balanceByClass === true, courses: snapshotCourses }
+    return { clusterId, ...(cluster.capacityFlexibility === undefined ? {} : {capacityFlexibility: cluster.capacityFlexibility}), ...(cluster.eligibleClassIds === undefined ? {} : { eligibleClassIds: [...new Set(cluster.eligibleClassIds)] }), label, description:String(cluster.description??'').slice(0,2000), rationaleMode:cluster.rationaleMode??'optional', requiredRankingCount: cluster.requiredRankingCount, balanceByClass: cluster.balanceByClass === true, courses: snapshotCourses }
   })
   const catalog: CycleCatalogSnapshot = { ...base, id: `catalog-${cycleId}`, cycleId, formDesign, clusters: catalogClusters }
   return firestore.runTransaction(async (transaction) => {

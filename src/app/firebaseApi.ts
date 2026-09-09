@@ -54,8 +54,8 @@ export async function createCycle(schoolYear: string, termLabel: string): Promis
   return (await httpsCallable<Record<string, unknown>, AssignmentCycle>(functionsClient(), 'createCycle')({ schoolYear, termLabel })).data
 }
 
-export interface CatalogCourseDraft { documentUrl?: string; imageUrl?: string; label: string; description: string; subjectArea: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: 'allowed' | 'approval_required' | 'discouraged' | 'prohibited' }
-export interface CatalogClusterDraft { eligibleClassIds?: string[]; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass: boolean; courses: CatalogCourseDraft[] }
+export interface CatalogCourseDraft { capacityLimit?: number; documentUrl?: string; imageUrl?: string; label: string; description: string; subjectArea: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: 'allowed' | 'approval_required' | 'discouraged' | 'prohibited' }
+export interface CatalogClusterDraft { capacityFlexibility?: number; eligibleClassIds?: string[]; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass: boolean; courses: CatalogCourseDraft[] }
 export async function saveCycleCatalog(cycleId: string, clusters: CatalogClusterDraft[], formDesign?: import('../domain/formDesign').FormDesign, expectedVersion?: number): Promise<void> {
   await httpsCallable<Record<string, unknown>, unknown>(functionsClient(), 'saveCycleCatalog')({ cycleId, clusters, ...(formDesign ? { formDesign } : {}), ...(expectedVersion === undefined ? {} : {expectedVersion}) })
 }
