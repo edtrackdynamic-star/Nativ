@@ -293,3 +293,8 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
   .work-shell .main-navigation { gap: 4px; }
   .work-shell .main-navigation button { padding-inline: 10px; }
 }
+
+.paste-table-preview { overflow-x: auto; margin-block: 12px; }
+.paste-table-preview table { width: 100%; border-collapse: collapse; }
+.paste-table-preview caption { text-align: start; margin-bottom: 8px; }
+.paste-table-preview th, .paste-table-preview td { border: 1px solid var(--line); padding: 8px; text-align: start; white-space: pre-wrap; overflow-wrap: anywhere; }

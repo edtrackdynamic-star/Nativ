@@ -1,6 +1,18 @@
 import { expect, it } from 'vitest'
 import { capacityError, parseTable } from './tablePaste'
 
+it('keeps all six user rows from a Markdown table including the first row', () => {
+  const rows = parseTable('| יעל | תאטרון |\n| ----: | ----: |\n| ראם | כוח מד"א |\n| הילה | חוק ומשפט |\n| יואל | פודקסטים וולוגים |\n| רינת | ערבית |\n| אופיר | עיצוב |')
+  expect(rows).toHaveLength(6)
+  expect(rows[0]).toEqual(['יעל','תאטרון'])
+  expect(rows[1]).toEqual(['ראם','כוח מד"א'])
+  expect(rows[5]).toEqual(['אופיר','עיצוב'])
+})
+it('keeps escaped pipes and rejects uneven Markdown rows', () => {
+  expect(parseTable('| מורה | קורס \\| נוסף |')).toEqual([['מורה','קורס | נוסף']])
+  expect(() => parseTable('| א | ב |\n| ג |')).toThrow()
+})
+
 it('preserves spreadsheet columns, multiline cells and escaped quotes', () => {
   expect(parseTable('מקבץ\tקורס\tתיאור\r\nא\tמדעים\t"שורה 1\nשורה ""2"""\r\n')).toEqual([['מקבץ','קורס','תיאור'],['א','מדעים','שורה 1\nשורה "2"']])
 })
