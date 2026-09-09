@@ -160,7 +160,7 @@ export function NativMvp() {
 
   return <div className={authenticatedUser ? 'app-shell work-shell' : 'app-shell login-shell'}>
     <header className="topbar">
-      <a className="brand" href="#main" aria-label="נתיב — מערכת שיבוץ קורסי בחירה"><span className="brand-mark"><img src="/nativ-mark.png" alt="" /></span><span><strong>נתיב</strong><small>מערכת שיבוץ קורסי בחירה</small></span></a>
+      <a className="brand" href="#main" aria-label="נתיב — מערכת שיבוץ קורסי בחירה"><span className="brand-mark"><img src="/nativ-mark.png?v=65442c9" alt="" /></span><span><strong>נתיב</strong><small>מערכת שיבוץ קורסי בחירה</small></span></a>
       {session && <SchoolBrand className="school-brand" src={schoolLogo} name={session.access.organizationName} />}
     </header>
     <main id="main"><section className="mvp-shell" aria-labelledby="mvp-title">

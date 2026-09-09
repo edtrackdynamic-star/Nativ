@@ -17,8 +17,8 @@ assert(manifest.icons.some(icon => icon.sizes === '192x192' && icon.purpose === 
 assert(manifest.icons.some(icon => icon.sizes === '512x512' && icon.purpose === 'any'))
 assert(manifest.icons.some(icon => icon.purpose === 'maskable'))
 const paths = new Set(['/manifest.webmanifest'])
-for (const icon of [...manifest.icons, {src:'/icons/nativ-180.png', sizes:'180x180'}, {src:'/icons/nativ-48.png', sizes:'48x48'}]) {
-  assert.match(icon.src, /^\/icons\/[a-z0-9-]+\.png$/)
+for (const icon of [...manifest.icons, {src:'/icons/nativ-180.png?v=65442c9', sizes:'180x180'}, {src:'/icons/nativ-48.png?v=65442c9', sizes:'48x48'}]) {
+  assert.match(icon.src, /^\/icons\/[a-z0-9-]+\.png\?v=[a-z0-9]+$/)
   const bytes = await readFile(new URL(icon.src.slice(1), root))
   assert.equal(bytes.subarray(0,8).toString('hex'), '89504e470d0a1a0a')
   assert.equal(`${bytes.readUInt32BE(16)}x${bytes.readUInt32BE(20)}`, icon.sizes)
@@ -27,11 +27,13 @@ for (const icon of [...manifest.icons, {src:'/icons/nativ-180.png', sizes:'180x1
 if (origin) {
   const live = await fetch(new URL('/', origin), {cache:'no-store'})
   assert(live.ok)
+  assert.match(live.headers.get('cache-control') ?? '', /(?:no-cache|no-store)/)
   assert.match(await live.text(), /rel="manifest" href="\/manifest.webmanifest"/)
-  for (const path of paths) {
+  for (const path of [...paths, '/index.html', '/nativ-mark.png?v=65442c9']) {
     const response = await fetch(new URL(path, origin), {cache:'no-store'})
     assert.equal(response.status, 200, path)
-    assert.match(response.headers.get('content-type') ?? '', path.endsWith('.png') ? /image\/png/ : /application\/manifest\+json/)
+    assert.match(response.headers.get('cache-control') ?? '', /(?:no-cache|no-store|max-age=0)/, path)
+    assert.match(response.headers.get('content-type') ?? '', path.includes('.png') ? /image\/png/ : path.endsWith('.html') ? /text\/html/ : /application\/manifest\+json/)
     const local = await readFile(new URL(path.slice(1), root))
     const remote = Buffer.from(await response.arrayBuffer())
     const hash = bytes => createHash('sha256').update(bytes).digest('hex')
