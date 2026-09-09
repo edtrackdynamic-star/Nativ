@@ -17,6 +17,8 @@
 - Firebase Functions בדור שני עם Node.js 22.
 - הגדרות אמולטורים וכללי Firestore חסומים כברירת מחדל.
 - אתר הייצור זמין ב־`https://edtrack-nativ.web.app` ומחובר ל־Firebase Auth המשותף של EdTrack.
+- סמל המוצר המאושר משלב מגילה מופשטת, דרך מתפצלת וחץ המשכי. נכס הצבע השקוף
+  נמצא ב־`public/nativ-mark.png`, ולצדו גרסה שחורה ב־`public/nativ-mark-monochrome.png`.
 - כניסת Google משתמשת בזרימת שיוך הזהות הקנונית של EdTrack; אם לחשבון יש כמה בתי ספר, המשתמש בוחר את בית הספר לפני טעינת נתוני נתיב.
 - מסד `nativ`, כללי האבטחה ו־Functions codebase בשם `nativ` פרוסים ב־`edtrack-development`.
 - חברות, ארגון ומנוי נקראים בצד השרת ממסד הליבה של EdTrack; תפקידי נתיב נשמרים במסד המוצר.
