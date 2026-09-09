@@ -55,3 +55,9 @@ describe('approved mail boundary', () => {
     expect(sent).toBe(1); expect(states.get('same')).toBe('sending')
   })
 })
+
+it('limits staff delivery to active professional roles',()=>{
+ expect(recipientAllowed('staff',{active:true,role:'student'},{active:true,roles:['placement_coordinator']})).toBe(false)
+ expect(recipientAllowed('staff',{active:true,role:'teacher'},{active:true,roles:['access_manager']})).toBe(false)
+ expect(recipientAllowed('staff',{active:true,role:'teacher'},{active:true,roles:['course_instructor']})).toBe(true)
+})

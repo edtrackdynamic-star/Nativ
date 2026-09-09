@@ -45,3 +45,10 @@ describe('preference submission validation', () => {
     expect(validatePreferenceSubmission(validSubmission(), { ...cycle, status: 'choice_closed' }).map((issue) => issue.code)).toContain('submission.choice_not_open')
   })
 })
+
+it('enforces a coordinator-required rationale only on final submission',()=>{
+ const submission=validSubmission();submission.catalogSnapshot[0].rationaleMode='required'
+ expect(validatePreferenceSubmission(submission,cycle).map(i=>i.code)).toContain('submission.rationale_required')
+ submission.status='draft';expect(validatePreferenceSubmission(submission,cycle)).toEqual([])
+ submission.status='submitted';submission.preferences[0].rationale='רוצה ללמוד תיאטרון';expect(validatePreferenceSubmission(submission,cycle)).toEqual([])
+})

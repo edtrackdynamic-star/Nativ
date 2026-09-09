@@ -54,16 +54,17 @@ export async function createCycle(schoolYear: string, termLabel: string): Promis
   return (await httpsCallable<Record<string, unknown>, AssignmentCycle>(functionsClient(), 'createCycle')({ schoolYear, termLabel })).data
 }
 
-export interface CatalogCourseDraft { label: string; description: string; subjectArea: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: 'allowed' | 'approval_required' | 'discouraged' | 'prohibited' }
-export interface CatalogClusterDraft { label: string; requiredRankingCount: number; balanceByClass: boolean; courses: CatalogCourseDraft[] }
-export async function saveCycleCatalog(cycleId: string, clusters: CatalogClusterDraft[]): Promise<void> {
-  await httpsCallable<Record<string, unknown>, unknown>(functionsClient(), 'saveCycleCatalog')({ cycleId, clusters })
+export interface CatalogCourseDraft { documentUrl?: string; imageUrl?: string; label: string; description: string; subjectArea: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: 'allowed' | 'approval_required' | 'discouraged' | 'prohibited' }
+export interface CatalogClusterDraft { description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass: boolean; courses: CatalogCourseDraft[] }
+export async function saveCycleCatalog(cycleId: string, clusters: CatalogClusterDraft[], formDesign?: import('../domain/formDesign').FormDesign, expectedVersion?: number): Promise<void> {
+  await httpsCallable<Record<string, unknown>, unknown>(functionsClient(), 'saveCycleCatalog')({ cycleId, clusters, ...(formDesign ? { formDesign } : {}), ...(expectedVersion === undefined ? {} : {expectedVersion}) })
 }
 export async function listEligibleInstructors(): Promise<Array<{ uid: string; displayName: string }>> {
   return (await httpsCallable<undefined, Array<{ uid: string; displayName: string }>>(functionsClient(), 'listEligibleInstructors')()).data
 }
-export async function getCycleCatalog(cycleId: string): Promise<{ catalog: { clusters: Array<{ clusterId: string; label: string; requiredRankingCount: number; balanceByClass?: boolean }> } | null; courses: Array<{ id: string; clusterId: string; label: string; description: string; subjectArea: string; instructorIds: string[]; capacity: { minimum: number; target: number; maximum: number }; repeatPolicy: CatalogCourseDraft['repeatPolicy'] }> }> {
-  return (await httpsCallable<Record<string, unknown>, { catalog: { clusters: Array<{ clusterId: string; label: string; requiredRankingCount: number; balanceByClass?: boolean }> } | null; courses: Array<{ id: string; clusterId: string; label: string; description: string; subjectArea: string; instructorIds: string[]; capacity: { minimum: number; target: number; maximum: number }; repeatPolicy: CatalogCourseDraft['repeatPolicy'] }> }>(functionsClient(), 'getCycleCatalog')({ cycleId })).data
+export interface CycleCatalogData { catalog: import('../domain/catalog').CycleCatalogSnapshot | null; courses: import('../domain/catalog').Course[] }
+export async function getCycleCatalog(cycleId: string): Promise<CycleCatalogData> {
+  return (await httpsCallable<{cycleId: string}, CycleCatalogData>(functionsClient(), 'getCycleCatalog')({cycleId})).data
 }
 
 export interface InstructorWorkspaceData { cycle: { schoolYear: string; termLabel: string; status: CycleStatus }; courses: Array<{ id: string; label: string; description: string; subjectArea: string; students: string[] }> }
@@ -154,3 +155,9 @@ export async function setUserAccess(uid: string, roles: RoleId[], active: boolea
 export async function requestAccessCodeLogin(alias: string, code: string): Promise<string> {
   return (await httpsCallable<{organizationId: string; alias: string; code: string}, {customToken: string}>(functionsClient(), 'loginWithAccessCode')({organizationId: import.meta.env.VITE_ORGANIZATION_ID || 'democratic-wizo', alias, code})).data.customToken
 }
+
+export type DeliveryAudience = 'student' | 'staff'
+export interface DeliveryPreview { signature:string; recipientSignature:string; version:number; messages:Array<{name:string;email:string;subject:string;text:string}>; skipped:number; alreadyQueued:boolean; status:{sent:number;failed:number;unknown:number;queued:number;failedBatches:number}|null }
+export async function previewResultDelivery(cycleId:string,audience:DeliveryAudience):Promise<DeliveryPreview>{return (await httpsCallable<Record<string,unknown>,DeliveryPreview>(functionsClient(),'previewResultDelivery')({cycleId,audience})).data}
+export async function sendResultDelivery(cycleId:string,audience:DeliveryAudience,preview:DeliveryPreview){await httpsCallable(functionsClient(),'sendResultDelivery')({cycleId,audience,signature:preview.signature,recipientSignature:preview.recipientSignature,expectedVersion:preview.version})}
+export async function rejectAssignmentRun(cycleId:string,expectedVersion:number,reason:string){await httpsCallable(functionsClient(),'rejectAssignmentRun')({cycleId,expectedVersion,reason})}

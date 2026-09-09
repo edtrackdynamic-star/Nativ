@@ -1,3 +1,4 @@
+import { parseFormDesign, safeLink } from '../../src/domain/formDesign'
 import { randomUUID } from 'node:crypto'
 import { getAuth } from 'firebase-admin/auth'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
@@ -16,7 +17,7 @@ import { actorFromRequest, inputRecord, requiredInteger, requiredString } from '
 
 const service = new NativCommandService(new FirestoreNativRepository(firestore))
 
-export { analyzeAppeal, approveAiEvaluation, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, publishAssignments, recommendAppeal, runAssignment, submitAppeal } from './workflowCallables'
+export { rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, publishAssignments, recommendAppeal, runAssignment, submitAppeal } from './workflowCallables'
 export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
 export { deliverNativMail } from './mailDelivery'
 export { getStudentRoster } from './studentRoster'
@@ -80,8 +81,8 @@ export const createCycle = onCall(callableOptions, async (request) => {
   return cycle
 })
 
-interface CatalogCourseInput { label: string; description?: string; subjectArea?: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: RepeatPolicy }
-interface CatalogClusterInput { label: string; requiredRankingCount: number; balanceByClass?: boolean; courses: CatalogCourseInput[] }
+interface CatalogCourseInput { documentUrl?: string; imageUrl?: string; label: string; description?: string; subjectArea?: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: RepeatPolicy }
+interface CatalogClusterInput { description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass?: boolean; courses: CatalogCourseInput[] }
 
 export const saveCycleCatalog = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request)
@@ -90,29 +91,45 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
   const cycleId = requiredString(data, 'cycleId')
   if (!Array.isArray(data.clusters) || !data.clusters.length) throw new HttpsError('invalid-argument', 'נדרש לפחות מקבץ אחד')
   const clusters = data.clusters as CatalogClusterInput[]
+  if(clusters.length>20 || clusters.some(c=>!Array.isArray(c.courses) || c.courses.length>40)) throw new HttpsError('invalid-argument','אפשר להגדיר עד 20 מקבצים ועד 40 קורסים במקבץ')
+  let formDesign: ReturnType<typeof parseFormDesign>
+  try { formDesign = parseFormDesign(data.formDesign); for(const c of clusters) for(const course of c.courses){safeLink(course.documentUrl,true);safeLink(course.imageUrl)} }
+  catch(error){throw new HttpsError('invalid-argument',error instanceof Error?error.message:'עיצוב הטופס אינו תקין')}
+  const teacherIds = [...new Set(clusters.flatMap(c=>c.courses.flatMap(course=>Array.isArray(course.instructorIds)?course.instructorIds:[])))]
+  if(teacherIds.some(id=>typeof id!=='string' || !id || id.includes('/')))throw new HttpsError('invalid-argument','מזהה מנחה אינו תקין')
+  const teachers = new Map<string,string>()
+  if(process.env.FUNCTIONS_EMULATOR==='true'){
+    for(const id of teacherIds){const user=await getAuth().getUser(id);if(user.customClaims?.organizationId!==actor.organizationId || user.customClaims?.active!==true || user.customClaims?.roles?.includes('student'))throw new HttpsError('permission-denied','המנחה אינו חבר צוות פעיל בבית הספר');teachers.set(id,user.displayName||user.email||'מורה')}
+  }else if(teacherIds.length){
+    const members=await coreFirestore.getAll(...teacherIds.map(id=>coreFirestore.doc(`organizations/${actor.organizationId}/members/${id}`)))
+    for(const member of members){if(member.data()?.active!==true || !['teacher','school_admin'].includes(member.data()?.role))throw new HttpsError('permission-denied','המנחה אינו חבר צוות פעיל בבית הספר');teachers.set(member.id,String(member.data()?.fullName??'מורה'))}
+  }
   const now = new Date().toISOString()
   const base = { organizationId: actor.organizationId, version: 1, createdAt: now, createdBy: actor.uid, updatedAt: now, updatedBy: actor.uid }
   const courses: Course[] = []
   const catalogClusters = clusters.map((cluster, clusterIndex) => {
     const label = typeof cluster.label === 'string' ? cluster.label.trim() : ''
-    if (!label || !Number.isInteger(cluster.requiredRankingCount) || !Array.isArray(cluster.courses) || cluster.courses.length < cluster.requiredRankingCount) throw new HttpsError('invalid-argument', 'יש להשלים את שם המקבץ ומספר הקורסים לדירוג')
+    if (!label || !Number.isInteger(cluster.requiredRankingCount) || cluster.requiredRankingCount<1 || !Array.isArray(cluster.courses) || cluster.courses.length < cluster.requiredRankingCount) throw new HttpsError('invalid-argument', 'יש להשלים את שם המקבץ ומספר הקורסים לדירוג')
     const clusterId = `cluster-${randomUUID()}`
     const snapshotCourses = cluster.courses.map((course) => {
       const courseLabel = typeof course.label === 'string' ? course.label.trim() : ''
       const instructorIds = Array.isArray(course.instructorIds) ? course.instructorIds.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())) : []
       if (!courseLabel || !instructorIds.length || ![course.minimum, course.target, course.maximum].every(Number.isInteger) || course.minimum < 0 || course.minimum > course.target || course.target > course.maximum) throw new HttpsError('invalid-argument', `יש להשלים מנחה וקיבולת תקינה בקורס ${courseLabel || 'ללא שם'}`)
       if (!['allowed', 'approval_required', 'discouraged', 'prohibited'].includes(course.repeatPolicy)) throw new HttpsError('invalid-argument', 'מדיניות החזרה אינה תקינה')
+      if(course.maximum<1)throw new HttpsError('invalid-argument','מקסימום התלמידים חייב להיות חיובי')
       const courseId = `course-${randomUUID()}`
-      courses.push({ ...base, id: courseId, cycleId, clusterId, logicalCourseId: courseId, label: courseLabel, description: String(course.description ?? '').trim(), subjectArea: String(course.subjectArea ?? '').trim(), instructorIds, slot: `slot-${clusterIndex + 1}`, eligibleGradeIds: [], capacity: { minimum: course.minimum, target: course.target, maximum: course.maximum }, repeatPolicy: course.repeatPolicy, published: true })
-      return { courseId, logicalCourseId: courseId, label: courseLabel }
+      courses.push({ ...base, id: courseId, cycleId, clusterId, logicalCourseId: courseId, label: courseLabel, description: String(course.description ?? '').trim().slice(0,4000), documentUrl:safeLink(course.documentUrl,true), imageUrl:safeLink(course.imageUrl), subjectArea: String(course.subjectArea ?? '').trim(), instructorIds, slot: `slot-${clusterIndex + 1}`, eligibleGradeIds: [], capacity: { minimum: course.minimum, target: course.target, maximum: course.maximum }, repeatPolicy: course.repeatPolicy, published: true })
+      return { courseId, logicalCourseId: courseId, label: courseLabel, description:String(course.description??'').trim().slice(0,4000), documentUrl:safeLink(course.documentUrl,true), imageUrl:safeLink(course.imageUrl), instructorNames:instructorIds.map(id=>teachers.get(id)!) }
     })
-    return { clusterId, label, requiredRankingCount: cluster.requiredRankingCount, balanceByClass: cluster.balanceByClass === true, courses: snapshotCourses }
+    if(cluster.rationaleMode && !['optional','required','hidden'].includes(cluster.rationaleMode))throw new HttpsError('invalid-argument','מצב שדה ההסבר אינו תקין')
+    return { clusterId, label, description:String(cluster.description??'').slice(0,2000), rationaleMode:cluster.rationaleMode??'optional', requiredRankingCount: cluster.requiredRankingCount, balanceByClass: cluster.balanceByClass === true, courses: snapshotCourses }
   })
-  const catalog: CycleCatalogSnapshot = { ...base, id: `catalog-${cycleId}`, cycleId, clusters: catalogClusters }
+  const catalog: CycleCatalogSnapshot = { ...base, id: `catalog-${cycleId}`, cycleId, formDesign, clusters: catalogClusters }
   return firestore.runTransaction(async (transaction) => {
     const cycleReference = firestore.doc(cycleDocumentPath(actor.organizationId, cycleId))
     const cycleSnapshot = await transaction.get(cycleReference)
     const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
+    if(data.expectedVersion!==undefined && cycle?.version!==data.expectedVersion)throw new HttpsError('aborted','התהליך השתנה מאז פתיחת העורך. פתחו אותו מחדש לפני שמירה.')
     if (cycle?.status !== 'draft') throw new HttpsError('failed-precondition', 'ניתן לערוך קורסים רק לפני פתיחת הבחירה')
     transaction.set(firestore.doc(catalogSnapshotDocumentPath(actor.organizationId, cycleId)), catalog)
     transaction.set(firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId)), { organizationId: actor.organizationId, cycleId, courses, updatedAt: now, updatedBy: actor.uid })
@@ -313,3 +330,5 @@ export const seedDemoEnvironment = onCall(callableOptions, async () => {
   })
   return { cycleId: demoCycle.id, accounts: demoAccounts.map(({ label, email, password }) => ({ label, email, password })) }
 })
+
+export { previewResultDelivery, sendResultDelivery } from './resultDelivery'

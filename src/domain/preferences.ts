@@ -5,12 +5,18 @@ export const submissionStatuses = ['draft', 'submitted'] as const
 export type SubmissionStatus = (typeof submissionStatuses)[number]
 
 export interface CourseSnapshot {
+  description?: string
+  documentUrl?: string
+  imageUrl?: string
+  instructorNames?: string[]
   courseId: string
   logicalCourseId: string
   label: string
 }
 
 export interface ClusterSnapshot {
+  description?: string
+  rationaleMode?: 'optional' | 'required' | 'hidden'
   clusterId: string
   label: string
   requiredRankingCount: number
@@ -57,6 +63,7 @@ export function validatePreferenceSubmission(submission: PreferenceSubmission, c
       issues.push({ code: 'submission.cluster_missing', message: `חסרות העדפות במקבץ ${cluster.label}`, path: `preferences.${cluster.clusterId}`, severity: 'error' })
       continue
     }
+    if (submission.status === 'submitted' && cluster.rationaleMode === 'required' && !preference.rationale?.trim()) issues.push({ code: 'submission.rationale_required', message: `יש למלא נימוק במקבץ ${cluster.label}`, severity: 'error' })
     const expectedCourseIds = new Set(cluster.courses.map((course) => course.courseId))
     const rankedCourseIds = preference.rankings.map((ranking) => ranking.courseId)
     const uniqueCourseIds = new Set(rankedCourseIds)

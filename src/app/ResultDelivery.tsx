@@ -1,0 +1,17 @@
+import { useState } from 'react'
+import { previewResultDelivery,sendResultDelivery,type DeliveryPreview,type DeliveryAudience } from './firebaseApi'
+import { useConfirmAction } from './interaction'
+import { useReadOnly } from './readOnly'
+export function ResultDelivery({cycleId,published}:{cycleId:string;published:boolean}){
+  const {confirm,confirmation}=useConfirmAction(),readOnly=useReadOnly()
+  const [audience,setAudience]=useState<DeliveryAudience>('staff'),[preview,setPreview]=useState<DeliveryPreview|null>(null),[message,setMessage]=useState(''),[pending,setPending]=useState(false),[limit,setLimit]=useState(20)
+  async function load(next:DeliveryAudience){if(pending)return;setPending(true);setPreview(null);setAudience(next);setLimit(20);try{setPreview(await previewResultDelivery(cycleId,next));setMessage('')}catch(error){setMessage(error instanceof Error?error.message:'לא ניתן להכין תצוגה מקדימה')}finally{setPending(false)}}
+  async function send(){if(!preview || pending)return;if(!await confirm(`לשלוח כעת ${preview.messages.length} הודעות ל${audience==='staff'?'צוות':'תלמידים'} המוצגים?`))return;setPending(true);try{await sendResultDelivery(cycleId,audience,preview);setPreview(await previewResultDelivery(cycleId,audience));setMessage('ההודעות הועברו לשליחה. אפשר לרענן כדי לבדוק את מצבן.')}catch(error){setPreview(null);setMessage(error instanceof Error?error.message:'השליחה לא הושלמה')}finally{setPending(false)}}
+  return <section className="workflow-section"><h3>שליחת תוצאות</h3>{confirmation}<p>הצוות מקבל תוצאות לפי תחום אחריותו: מנחים מקבלים את תלמידי הקורסים שלהם, ורכזים ומזכירות את כלל השיבוצים. כל תלמיד מקבל רק את השיבוץ שלו.</p>{!published && <p>לפני השליחה יש לאשר את השיבוץ ולפרסם אותו במערכת.</p>}
+    <div className="workspace-actions"><button className="secondary-action" disabled={!published||pending} onClick={()=>void load('staff')}>תצוגה מקדימה לצוות</button><button className="secondary-action" disabled={!published||pending} onClick={()=>void load('student')}>תצוגה מקדימה לתלמידים</button></div><p role="status">{pending?'מכין…':message}</p>
+    {preview && <><h4>{audience==='staff'?'תוצאות לצוות':'תוצאות לתלמידים'}</h4><p>{preview.messages.length} הודעות · {new Set(preview.messages.map(m=>m.email)).size} נמענים{preview.skipped>0?` · ${preview.skipped} הודעות לא נכללו עקב כתובת חסרה או גישה לא פעילה`:''}</p>
+    {preview.status && <p role="status">נשלחו: {preview.status.sent} · בתור: {preview.status.queued} · נכשלו: {preview.status.failed} · דורשות בירור: {preview.status.unknown}{preview.status.failedBatches>0?` · ${preview.status.failedBatches} קבוצות שליחה נכשלו`:''}</p>}
+    <div className="delivery-preview">{preview.messages.slice(0,limit).map((m,i)=><details key={i}><summary>{m.name} · {m.email} · {m.subject}</summary><p className="formatted-text">{m.text}</p></details>)}</div>{preview.messages.length>limit&&<button className="secondary-action" onClick={()=>setLimit(limit+20)}>הצגת הודעות נוספות</button>}
+    <div className="workspace-actions"><button className="primary-action" disabled={readOnly||pending||preview.alreadyQueued||!preview.messages.length} onClick={()=>void send()}>{preview.alreadyQueued?'התוצאות האלה כבר הועברו לשליחה':audience==='staff'?'שליחת תוצאות לצוות':'שליחת תוצאות לתלמידים'}</button><button className="secondary-action" disabled={pending} onClick={()=>void load(audience)}>רענון מצב השליחה</button></div></>}
+  </section>
+}

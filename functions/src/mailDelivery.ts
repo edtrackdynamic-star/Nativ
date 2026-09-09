@@ -46,7 +46,7 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
   const { organizationId } = event.params
   const reference = event.data.ref
   const jobs = event.data.data().jobs as MailJob[]
-  if (!segment(organizationId) || !Array.isArray(jobs) || jobs.some((job) => !job || typeof job.notificationId !== 'string' || typeof job.studentId !== 'string' || !segment(job.notificationId) || !segment(job.studentId) || !['student', 'secretary'].includes(job.audience))) {
+  if (!segment(organizationId) || !Array.isArray(jobs) || jobs.some((job) => !job || typeof job.notificationId !== 'string' || typeof job.studentId !== 'string' || !segment(job.notificationId) || !segment(job.studentId) || !['student', 'secretary','staff'].includes(job.audience) || (job.audience==='staff' && (!job.recipientId || !segment(job.recipientId))))) {
     await reference.update({ status: 'failed', errorCode: 'mail_event_invalid' }); return
   }
   const attempt = await nativFirestore.runTransaction(async (transaction) => {
@@ -70,7 +70,7 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
     // Freeze recipients once: replayed events must not acquire new recipients.
     let roster = (await statusReference.get()).data()?.recipientIds as string[] | undefined
     if (!roster) {
-      const candidates = job.audience === 'student' ? [job.studentId] : (await nativFirestore.collection(`organizations/${organizationId}/accessAssignments`).where('roles', 'array-contains', 'secretary').get()).docs.filter((doc) => doc.data().active === true).map((doc) => doc.id)
+      const candidates = job.audience === 'staff' ? [job.recipientId!] : job.audience === 'student' ? [job.studentId] : (await nativFirestore.collection(`organizations/${organizationId}/accessAssignments`).where('roles', 'array-contains', 'secretary').get()).docs.filter((doc) => doc.data().active === true).map((doc) => doc.id)
       roster = await nativFirestore.runTransaction(async (transaction) => {
         const existing = await transaction.get(statusReference)
         if (existing.exists) return existing.data()!.recipientIds as string[]
@@ -79,7 +79,7 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
       })
     }
     let student = { name: '', classLabel: '' }
-    if (job.audience === 'secretary') {
+    if (job.audience !== 'student') {
       const [member, profile] = await Promise.all([coreFirestore.doc(`organizations/${organizationId}/members/${job.studentId}`).get(), coreFirestore.doc(`organizations/${organizationId}/students/${job.studentId}`).get()])
       const classId = String(profile.data()?.classId ?? member.data()?.classIds?.[0] ?? '')
       const classRecord = segment(classId) ? await coreFirestore.doc(`organizations/${organizationId}/classes/${classId}`).get() : null
@@ -89,6 +89,13 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
     for (const uid of roster) {
       const receiptId = key(`${job.notificationId}:${uid}`)
       // Recheck membership, product role and subscription immediately before SMTP.
+      if(job.audience==='staff'){
+        const access=(await nativFirestore.doc(`organizations/${organizationId}/accessAssignments/${uid}`).get()).data()
+        if(!access?.roles?.some((role:string)=>['secretary','placement_coordinator'].includes(role))){
+          const catalog=(await nativFirestore.doc(`organizations/${organizationId}/nativCourseCatalogs/${event.data.data().cycleId}`).get()).data()
+          if(!catalog?.courses?.some((course:{id:string;instructorIds:string[]})=>course.id===job.courseId && course.instructorIds.includes(uid))){statuses.push('blocked');continue}
+        }
+      }
       const address = await recipient(organizationId, uid, job.audience)
       if (!address || !await organizationIsActive(organizationId)) { statuses.push('blocked'); continue }
       const content = renderMail(job, student)

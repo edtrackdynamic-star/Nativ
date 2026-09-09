@@ -123,6 +123,11 @@ describe('Nativ callable system flow', () => {
     workflow = (await run({ cycleId: demoCycle.id })).data
     expect(workflow.assignmentRun?.assignments).toHaveLength(2)
     expect(workflow.assignmentRun).toMatchObject({ algorithmVersion: 'legacy-compatible-1.0.0', seed: 42 })
+    const rejectRun=httpsCallable<Record<string,unknown>,WorkflowState>(functions,'rejectAssignmentRun')
+    await expect(rejectRun({cycleId:demoCycle.id,expectedVersion:0,reason:'בדיקה'})).rejects.toMatchObject({code:'functions/aborted'})
+    workflow=(await rejectRun({cycleId:demoCycle.id,expectedVersion:workflow.version,reason:'בחינה מחדש לפני פרסום'})).data
+    expect(workflow.assignmentRun).toBeUndefined()
+    workflow=(await run({cycleId:demoCycle.id})).data
     await expect(transition({ cycleId: demoCycle.id, expectedVersion: 3, to: 'published', reason: 'ניסיון לעקוף אישור', idempotencyKey: 'system-publish-bypass-blocked' })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
 
     await signOut(auth)
@@ -142,7 +147,16 @@ describe('Nativ callable system flow', () => {
     const publish = httpsCallable<{ cycleId: string }, WorkflowState>(functions, 'publishAssignments')
     workflow = (await publish({ cycleId: demoCycle.id })).data
     expect(workflow.assignmentRun?.publishedAt).toBeTruthy()
-    expect(workflow.notifications).toHaveLength(4)
+    expect(workflow.notifications).toHaveLength(2)
+    expect((await mailEvents()).size).toBe(0)
+    const previewSend=httpsCallable<Record<string,unknown>,{signature:string;recipientSignature:string;version:number;messages:Array<{email:string}>}>(functions,'previewResultDelivery')
+    const sendResults=httpsCallable<Record<string,unknown>,unknown>(functions,'sendResultDelivery')
+    const studentPreview=(await previewSend({cycleId:demoCycle.id,audience:'student'})).data
+    expect(studentPreview.messages).toHaveLength(2)
+    expect(studentPreview.messages.every(m=>m.email==='student@nativ.demo')).toBe(true)
+    await expect(sendResults({cycleId:demoCycle.id,audience:'student',signature:'stale',recipientSignature:studentPreview.recipientSignature,expectedVersion:studentPreview.version})).rejects.toMatchObject({code:'functions/aborted'})
+    await sendResults({cycleId:demoCycle.id,audience:'student',signature:studentPreview.signature,recipientSignature:studentPreview.recipientSignature,expectedVersion:studentPreview.version})
+    await sendResults({cycleId:demoCycle.id,audience:'student',signature:studentPreview.signature,recipientSignature:studentPreview.recipientSignature,expectedVersion:studentPreview.version})
     const publicationEvents = await mailEvents()
     expect(publicationEvents.size).toBe(1)
     expect(publicationEvents.docs[0].data().jobs).toHaveLength(2)
@@ -184,15 +198,20 @@ describe('Nativ callable system flow', () => {
     workflow = (await execute({ cycleId: demoCycle.id, appealId: appeal.id, expectedWorkflowVersion: workflow.version })).data
     expect(workflow.assignmentRun!.assignments.find((entry) => entry.studentId === 'student-demo-001' && entry.clusterId === 'cluster-arts')!.courseId).toBe(requestedCourseId)
     expect(workflow.appeals.find((entry) => entry.id === appeal.id)?.status).toBe('executed')
-    expect(workflow.notifications.filter((entry) => entry.audience === 'secretary')).toHaveLength(2)
-    expect(workflow.notifications.filter((entry) => entry.audience === 'student' && entry.channel === 'email')).toHaveLength(3)
-    const changeEvents = await mailEvents()
-    expect(changeEvents.size).toBe(2)
-    const change = changeEvents.docs.find((doc) => doc.id.startsWith('appeal-'))!.data()
-    expect(change.jobs.map((job: { audience: string }) => job.audience)).toEqual(['secretary', 'student'])
-    expect(JSON.stringify(change)).not.toMatch(/rationale|originalSubmission|aiEvaluation|reason|analysis/)
-    await expect(execute({ cycleId: demoCycle.id, appealId: appeal.id, expectedWorkflowVersion: workflow.version })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+    expect(workflow.notifications.filter((entry) => entry.audience === 'secretary')).toHaveLength(1)
+    expect(workflow.notifications.filter((entry) => entry.audience === 'student' && entry.channel === 'email')).toHaveLength(0)
+    expect((await mailEvents()).size).toBe(1)
+    const staffPreview=(await previewSend({cycleId:demoCycle.id,audience:'staff'})).data
+    expect(staffPreview.messages.length).toBeGreaterThan(0)
+    expect(staffPreview.messages.every(m=>m.email!=='student@nativ.demo')).toBe(true)
+    await sendResults({cycleId:demoCycle.id,audience:'staff',signature:staffPreview.signature,recipientSignature:staffPreview.recipientSignature,expectedVersion:staffPreview.version})
     expect((await mailEvents()).size).toBe(2)
+    const change=(await mailEvents()).docs.find(doc=>doc.data().jobs[0].audience==='staff')!.data()
+    expect(JSON.stringify(change)).not.toMatch(/rationale|originalSubmission|aiEvaluation|reason|analysis/)
+    await expect(execute({cycleId:demoCycle.id,appealId:appeal.id,expectedWorkflowVersion:workflow.version})).rejects.toMatchObject({code:'functions/failed-precondition'})
+    await signOut(auth);await signInWithEmailAndPassword(auth,student.email,student.password)
+    await expect(previewSend({cycleId:demoCycle.id,audience:'staff'})).rejects.toMatchObject({code:'functions/permission-denied'})
+
   })
 
   it('keeps access management separate from professional data and supports multiple role holders', async () => {
@@ -242,12 +261,15 @@ describe('Nativ callable system flow', () => {
     const saveCatalog = httpsCallable<Record<string, unknown>, { id: string }>(functions, 'saveCycleCatalog')
     await saveCatalog({
       cycleId: created.id,
+      expectedVersion:created.version,
+      formDesign:{title:'בוחרים ביחד',theme:'teal',layout:'list'},
       clusters: [{
         label: 'אמנויות',
+        description:'בחרו את הקורס המועדף',rationaleMode:'required',
         requiredRankingCount: 1,
         courses: [{
           label: 'תיאטרון',
-          description: 'סדנת תיאטרון',
+          description: 'סדנת תיאטרון',documentUrl:'https://docs.google.com/document/d/test-document/edit',
           subjectArea: 'אמנויות',
           instructorIds: [instructors[0].uid],
           minimum: 0,
@@ -261,7 +283,8 @@ describe('Nativ callable system flow', () => {
     const getCatalog = httpsCallable<{ cycleId: string }, { catalog: { clusters: unknown[] }; courses: unknown[] }>(functions, 'getCycleCatalog')
     const catalog = (await getCatalog({ cycleId: created.id })).data
     expect(catalog.catalog.clusters).toHaveLength(1)
-    expect(catalog.catalog.clusters[0]).toMatchObject({ balanceByClass: false })
+    expect(catalog.catalog.clusters[0]).toMatchObject({ balanceByClass: false,rationaleMode:'required',description:'בחרו את הקורס המועדף' })
+    expect(catalog.catalog).toMatchObject({formDesign:{title:'בוחרים ביחד',theme:'teal'}})
     expect(catalog.courses).toHaveLength(1)
 
     const listCycles = httpsCallable<undefined, AssignmentCycle[]>(functions, 'listCycles')
@@ -270,6 +293,7 @@ describe('Nativ callable system flow', () => {
     const getCycle = httpsCallable<{ cycleId: string }, AssignmentCycle>(functions, 'getCycle')
     const configured = (await getCycle({ cycleId: created.id })).data
     const transition = httpsCallable<Record<string, unknown>, AssignmentCycle>(functions, 'transitionCycle')
+    await expect(saveCatalog({cycleId:created.id,expectedVersion:0,clusters:[{label:'x',requiredRankingCount:1,courses:[{label:'x',instructorIds:[instructors[0].uid],minimum:0,target:1,maximum:2,repeatPolicy:'allowed'}]}]})).rejects.toMatchObject({code:'functions/aborted'})
     const opened = (await transition({ cycleId: created.id, expectedVersion: configured.version, to: 'choice_open', reason: 'פתיחת בדיקת מערכת', idempotencyKey: 'system-open-new-cycle' })).data
     await transition({ cycleId: created.id, expectedVersion: opened.version, to: 'choice_closed', reason: 'סיום בחירה ללא הגשות', idempotencyKey: 'system-close-empty-cycle' })
 

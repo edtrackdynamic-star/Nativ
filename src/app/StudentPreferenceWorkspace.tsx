@@ -1,3 +1,4 @@
+import { ChoiceForm } from './ChoiceForm'
 import { rankingsComplete } from './preferenceState'
 import { useUnsavedChanges } from './interaction'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -76,16 +77,6 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false }: Studen
     return () => window.clearTimeout(timer)
   }, [context, cycle, cycleId, preferences, saving, readOnly, failedSignature])
 
-  function updateRanking(clusterId: string, rank: number, courseId: string) {
-    setPreferences((current) => current.map((preference) => preference.clusterId === clusterId
-      ? { ...preference, rankings: preference.rankings.map((ranking) => ranking.rank === rank ? { ...ranking, courseId } : ranking) }
-      : preference))
-  }
-
-  function updateRationale(clusterId: string, rationale: string) {
-    setPreferences((current) => current.map((preference) => preference.clusterId === clusterId ? { ...preference, rationale } : preference))
-  }
-
   async function submit() {
     if (!complete || busy.current || readOnly || isSubmitted) return
     busy.current = true
@@ -131,42 +122,16 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false }: Studen
   }
 
   return (
-    <section className="workspace-card" aria-labelledby="student-form-title">
+    <section className="workspace-card" aria-label="טופס בחירה">
       <div className="workspace-heading">
-        <div><span className="eyebrow">אזור תלמיד</span><h2 id="student-form-title">טופס הבחירה שלי</h2></div>
+        <div><span className="eyebrow">אזור תלמיד</span><strong>הבחירות שלי</strong></div>
         <span className="status-pill">{isSubmitted ? 'הוגש' : submissionCount ? 'שינויים שטרם הוגשו' : 'טיוטה'}</span>
       </div>
       <p className="workspace-message" aria-live="polite">{message}</p>
       {failedSignature === signature && <button className="secondary-action" onClick={() => setFailedSignature('')}>ניסיון שמירה נוסף</button>}
       <p>{preferences.reduce((sum, entry) => sum + entry.rankings.filter((ranking) => ranking.courseId).length, 0)} מתוך {context.catalog.clusters.reduce((sum, entry) => sum + entry.requiredRankingCount, 0)} בחירות הושלמו</p>
-      <div className="cluster-grid">
-        {context.catalog.clusters.map((cluster) => {
-          const preference = preferences.find((entry) => entry.clusterId === cluster.clusterId)
-          return (
-            <article className="cluster-card" key={cluster.clusterId}>
-              <h3>{cluster.label}</h3>
-              <p>יש לדרג {cluster.requiredRankingCount} קורסים. כל קורס יכול להופיע פעם אחת.</p>
-              {Array.from({ length: cluster.requiredRankingCount }, (_, index) => index + 1).map((rank) => {
-                const selected = preference?.rankings.find((entry) => entry.rank === rank)?.courseId ?? ''
-                const usedElsewhere = new Set(preference?.rankings.filter((entry) => entry.rank !== rank).map((entry) => entry.courseId))
-                return (
-                  <label className="field-row" key={rank}><span>בחירה {rank}</span>
-                    <select value={selected} onChange={(event) => updateRanking(cluster.clusterId, rank, event.target.value)}>
-                      <option value="">בחרו קורס</option>
-                      {cluster.courses.map((course) => <option key={course.courseId} value={course.courseId} disabled={usedElsewhere.has(course.courseId)}>{course.label}</option>)}
-                    </select>
-                  </label>
-                )
-              })}
-              <label className="rationale-field"><span>מה חשוב לך בבחירה? <small>אופציונלי</small></span>
-                <textarea rows={3} value={preference?.rationale ?? ''} onChange={(event) => updateRationale(cluster.clusterId, event.target.value)} placeholder="אפשר לשתף בשיקולים, בסקרנות או במטרה שלך" />
-              </label>
-            </article>
-          )
-        })}
-      </div>
+      <ChoiceForm clusters={context.catalog.clusters} design={context.catalog.formDesign} preferences={preferences} onChange={setPreferences} onSubmit={()=>void submit()} disabled={readOnly || saving} submitDisabled={!complete || saving || isSubmitted || readOnly} />
       <div className="workspace-actions">
-        <button type="button" className="primary-action" onClick={() => void submit()} disabled={!complete || saving || isSubmitted || readOnly}>אישור והגשת הבחירות</button>
         <span>{isSubmitted ? 'הבחירות המוצגות הוגשו ונשמרו' : submissionCount ? 'יש להגיש מחדש כדי לעדכן את הבחירות שהוגשו' : 'הבחירות טרם הוגשו'}</span>
       </div>
     </section>

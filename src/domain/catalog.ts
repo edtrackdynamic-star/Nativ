@@ -25,6 +25,8 @@ export interface Course extends VersionedEntity {
   clusterId: string
   logicalCourseId: string
   label: string
+  documentUrl?: string
+  imageUrl?: string
   description: string
   subjectArea: string
   instructorIds: string[]
@@ -38,6 +40,7 @@ export interface Course extends VersionedEntity {
 
 export interface CycleCatalogSnapshot extends VersionedEntity {
   cycleId: string
+  formDesign?: import('./formDesign').FormDesign
   clusters: ClusterSnapshot[]
 }
 
