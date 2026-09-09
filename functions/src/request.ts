@@ -79,7 +79,7 @@ export async function actorFromRequest(request: CallableRequest, operation: 'rea
   }
   const accessMode = subscriptionAccess(subscription.data())
   if (!accessMode || (operation === 'write' && accessMode !== 'full')) {
-    throw new HttpsError('permission-denied', operation === 'write' ? 'מנוי נתיב אינו מאפשר שינוי נתונים' : 'אין מנוי פעיל לנתיב')
+    throw new HttpsError('permission-denied', operation === 'write' ? 'מנוי נתיב אינו מאפשר שינוי נתונים' : `אין מנוי פעיל לנתיב בבית הספר ${String(organizationData?.name ?? organizationId)}. אפשר לבחור בית ספר אחר או לפנות למנהל בית הספר.`)
   }
   const accessData = productAccess.data()
   const assignedRoles = accessData?.active === false ? [] : allowedValues<RoleId>(accessData?.roles, roleIds)

@@ -123,6 +123,16 @@ export function NativMvp() {
     catch (error) { setMessage(friendlyError(error, 'הכניסה נכשלה.')) }
     finally { setPending(false) }
   }
+  async function chooseSchool() {
+    if (pending) return
+    try {
+      setPending(true)
+      const options = await listGoogleAccessOptions()
+      setOrganizationOptions(options)
+      setMessage(options.length ? 'בחרו את בית הספר שאליו תרצו להיכנס.' : 'לא נמצאו בתי ספר נוספים לחשבון. אפשר לצאת ולהיכנס עם פרטי בית הספר.')
+    } catch { setMessage('לא ניתן לבחור בית ספר בחשבון זה. אפשר לצאת ולהיכנס בשם ובקוד האישי של בית הספר.') }
+    finally { setPending(false) }
+  }
   async function enterOrganization(option: GoogleAccessOption) {
     if (!nativAuth || pending) return
     try {
@@ -154,6 +164,7 @@ export function NativMvp() {
     <p className="workspace-message" aria-live="polite">{message}</p>
     {session && cyclesLoading && !authError && <p role="status">טוען את מחזורי השיבוץ…</p>}
     {authError && <button type="button" className="secondary-action" onClick={() => setAuthReload((value) => value + 1)}>ניסיון חוזר</button>}
+    {authenticatedUser && !session && authError && <button type="button" className="secondary-action" disabled={pending} onClick={() => void chooseSchool()}>בחירת בית ספר</button>}
     {!authenticatedUser && <form className="login-form" onSubmit={(event) => { event.preventDefault(); void loginWithCode() }}>
       <label>שם מלא<input autoComplete="username" value={alias} onChange={(event) => setAlias(event.target.value)} required minLength={2} disabled={pending} /></label>
       <label>סיסמה / קוד אישי<input type="password" inputMode="numeric" autoComplete="current-password" pattern="[0-9]{4,8}" minLength={4} maxLength={8} value={code} onChange={(event) => setCode(event.target.value)} required disabled={pending} aria-describedby="login-help" /></label>
@@ -161,7 +172,7 @@ export function NativMvp() {
       <button type="submit" className="primary-action" disabled={pending || !firebaseConfigured}>{pending ? 'נכנס…' : 'כניסה'}</button>
     </form>}
     {!authenticatedUser && !emulatorMode && <button type="button" className="primary-action" disabled={pending} onClick={() => void loginWithGoogle()}>כניסה עם Google</button>}
-    {authenticatedUser && !session && organizationOptions.length > 1 && <div className="workspace-card"><h3>בחירת בית ספר</h3><div className="organization-options">{organizationOptions.map((option) => <button type="button" className="secondary-action" disabled={pending} key={option.id} onClick={() => void enterOrganization(option)}>{option.name}</button>)}</div></div>}
+    {authenticatedUser && !session && organizationOptions.length > 0 && <div className="workspace-card"><h3>בחירת בית ספר</h3><div className="organization-options">{organizationOptions.map((option) => <button type="button" className="secondary-action" disabled={pending} key={option.id} onClick={() => void enterOrganization(option)}>{option.name}</button>)}</div></div>}
     {!authenticatedUser && emulatorMode && <div className="demo-login-grid">{accounts.map((account) => <button type="button" disabled={pending} key={account.email} onClick={() => void login(account)}><span>{account.label.slice(0, 1)}</span><strong>כניסה כ{account.label}</strong></button>)}</div>}
     {session && !session.access.roles.length && <div className="workspace-card"><h3>עדיין לא הוקצה לך תפקיד בנתיב</h3><p>מנהל הגישה בבית הספר יכול להקצות לך תפקיד מתאים.</p>{session.access.coreRole === 'school_admin' && <button type="button" className="primary-action" disabled={pending} onClick={() => void activateInitialManager()}>הפעלת מנהל הגישה הראשון</button>}</div>}
     {session?.access.accessMode === 'read_only' && <p className="read-only-notice">המידע זמין לצפייה בלבד. לא ניתן לבצע שינויים כעת.</p>}
