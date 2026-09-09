@@ -79,7 +79,7 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
       })
     }
     let student = { name: '', classLabel: '' }
-    if (job.audience !== 'student') {
+    if (job.audience !== 'student' && !job.results?.length) {
       const [member, profile] = await Promise.all([coreFirestore.doc(`organizations/${organizationId}/members/${job.studentId}`).get(), coreFirestore.doc(`organizations/${organizationId}/students/${job.studentId}`).get()])
       const classId = String(profile.data()?.classId ?? member.data()?.classIds?.[0] ?? '')
       const classRecord = segment(classId) ? await coreFirestore.doc(`organizations/${organizationId}/classes/${classId}`).get() : null
@@ -93,7 +93,7 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
         const access=(await nativFirestore.doc(`organizations/${organizationId}/accessAssignments/${uid}`).get()).data()
         if(!access?.roles?.some((role:string)=>['secretary','placement_coordinator'].includes(role))){
           const catalog=(await nativFirestore.doc(`organizations/${organizationId}/nativCourseCatalogs/${event.data.data().cycleId}`).get()).data()
-          if(!catalog?.courses?.some((course:{id:string;instructorIds:string[]})=>course.id===job.courseId && course.instructorIds.includes(uid))){statuses.push('blocked');continue}
+          if(!(job.results?.map(row=>row.courseId)??[job.courseId]).every(courseId=>catalog?.courses?.some((course:{id:string;instructorIds:string[]})=>course.id===courseId && course.instructorIds.includes(uid)))){statuses.push('blocked');continue}
         }
       }
       const address = await recipient(organizationId, uid, job.audience)

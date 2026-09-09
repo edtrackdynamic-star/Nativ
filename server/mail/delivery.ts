@@ -4,6 +4,7 @@ export interface MailJob {
   audience: 'student' | 'secretary' | 'staff'
   recipientId?: string
   courseId?: string
+  results?: Array<{studentId:string;name:string;classLabel:string;clusterLabel:string;courseLabel:string;courseId:string}>
   studentId: string
   clusterLabel: string
   afterCourseLabel: string
@@ -31,6 +32,11 @@ export function recipientAllowed(audience: MailJob['audience'], member: Record<s
 export function renderMail(job: MailJob, student: { name: string; classLabel: string }): { subject: string; text: string } {
   const when = new Date(job.occurredAt)
   if (!Number.isFinite(when.getTime())) throw new Error('Invalid mail timestamp')
+  if(job.results?.length){
+    const subject=job.audience==='staff'?'נתיב — תוצאות השיבוץ':'נתיב — השיבוצים שלך'
+    const rows=job.results.map(row=>job.audience==='staff'?`${row.name} · ${row.classLabel} · ${row.clusterLabel}: ${row.courseLabel}`:`${row.clusterLabel}: ${row.courseLabel}`)
+    return {subject,text:[...rows,'','לצפייה בנתיב: https://edtrack-nativ.web.app/'].join('\n')}
+  }
   const subject = job.audience === 'staff' ? 'נתיב — תוצאות השיבוץ' : job.audience === 'secretary' ? 'נתיב — שינוי שיבוץ שבוצע' : 'נתיב — השיבוץ שלך'
   const lines = job.audience === 'staff' ? [`תלמיד/ה: ${student.name}`,`כיתה: ${student.classLabel}`,`מקבץ: ${job.clusterLabel}`,`קורס: ${job.afterCourseLabel}`] : job.audience === 'secretary'
     ? [`תלמיד/ה: ${student.name}`, `כיתה: ${student.classLabel}`, `מקבץ: ${job.clusterLabel}`, `לפני: ${job.beforeCourseLabel ?? 'לא צוין'}`, `אחרי: ${job.afterCourseLabel}`, `מועד הביצוע: ${when.toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })}`]

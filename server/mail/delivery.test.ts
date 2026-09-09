@@ -61,3 +61,8 @@ it('limits staff delivery to active professional roles',()=>{
  expect(recipientAllowed('staff',{active:true,role:'teacher'},{active:true,roles:['access_manager']})).toBe(false)
  expect(recipientAllowed('staff',{active:true,role:'teacher'},{active:true,roles:['course_instructor']})).toBe(true)
 })
+
+it('renders one consolidated student message without staff-only names and classes',()=>{
+ const content=renderMail({...job,results:[{studentId:'student-1',name:'שם לצוות',classLabel:'ז1',clusterLabel:'אמנות',courseLabel:'מוזיקה',courseId:'c1'},{studentId:'student-1',name:'שם לצוות',classLabel:'ז1',clusterLabel:'מדע',courseLabel:'רובוטיקה',courseId:'c2'}]},{name:'',classLabel:''})
+ expect(content.text).toContain('אמנות: מוזיקה');expect(content.text).toContain('מדע: רובוטיקה');expect(content.text).not.toContain('שם לצוות');expect(content.text).not.toContain('ז1')
+})

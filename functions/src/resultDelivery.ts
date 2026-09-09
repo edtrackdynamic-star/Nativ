@@ -28,7 +28,7 @@ async function prepare(request: Parameters<typeof actorFromRequest>[0], write=fa
   }else{
     const [m,a]=await Promise.all([coreFirestore.collection(`organizations/${actor.organizationId}/members`).get(),db.collection(`organizations/${actor.organizationId}/accessAssignments`).get()]);m.docs.forEach(d=>members.set(d.id,d.data()));a.docs.forEach(d=>access.set(d.id,d.data()))
   }
-  const jobs:MailJob[]=[],messages:Array<{name:string;email:string;subject:string;text:string}>=[]
+  const individualJobs:MailJob[]=[],recipients=new Map<string,{name:string;email:string}>()
   let skipped=0
   const now=new Date().toISOString()
   for(const assignment of workflow.assignmentRun.assignments){
@@ -38,9 +38,14 @@ async function prepare(request: Parameters<typeof actorFromRequest>[0], write=fa
     for(const uid of candidates){const member=members.get(uid),email=canonicalEmail(member?.primaryEmail)??canonicalEmail(member?.email)
       if(!email || !recipientAllowed(audience as MailJob['audience'],member,access.get(uid))){skipped++;continue}
       const job:MailJob={notificationId:hash(dispatchId+':'+uid+':'+assignment.studentId+':'+assignment.clusterId),audience:audience as 'student'|'staff',recipientId:uid,studentId:assignment.studentId,courseId:course.id,clusterLabel:cluster.label,afterCourseLabel:course.label,occurredAt:now}
-      jobs.push(job);messages.push({name:String(member?.fullName??'נמען'),email,...renderMail(job,{name:assignment.studentLabel??String(members.get(assignment.studentId)?.fullName??'תלמיד'),classLabel:assignment.studentClassLabel??''})})
+      job.results=[{studentId:assignment.studentId,name:assignment.studentLabel??String(members.get(assignment.studentId)?.fullName??'תלמיד'),classLabel:assignment.studentClassLabel??'',clusterLabel:cluster.label,courseLabel:course.label,courseId:course.id}];individualJobs.push(job);recipients.set(uid,{name:String(member?.fullName??'נמען'),email})
     }
   }
+  const grouped=new Map<string,MailJob>()
+  for(const job of individualJobs){const uid=job.recipientId!;const existing=grouped.get(uid);if(existing)existing.results!.push(...job.results!);else grouped.set(uid,{...job,notificationId:hash(dispatchId+':'+uid),results:[...job.results!]})}
+  const jobs=[...grouped.values()]
+  if(jobs.some(job=>Buffer.byteLength(JSON.stringify(job))>650000))throw new HttpsError('failed-precondition','הדוח גדול מדי לשליחה. פנו למנהל המערכת.')
+  const messages=jobs.map(job=>({...recipients.get(job.recipientId!)!,...renderMail(job,{name:'',classLabel:''})}))
   if(jobs.length>3000)throw new HttpsError('failed-precondition','רשימת השליחה גדולה מדי. פנו למנהל המערכת לפני שליחה.')
   const recipientSignature=hash(JSON.stringify(messages.map((m,i)=>[jobs[i].recipientId,jobs[i].studentId,jobs[i].courseId,m.email,m.subject,m.text]).sort()))
   const dispatch=await dispatchRef.get()
@@ -64,7 +69,10 @@ export const sendResultDelivery=onCall(callableOptions,async request=>{
     if(existing.exists)return {alreadyQueued:true}
     if(workflow.data()?.version!==p.workflow.version)throw new HttpsError('aborted','השיבוץ השתנה. יש לבדוק מחדש לפני השליחה.')
     const eventIds:string[]=[]
-    for(let i=0;i<p.jobs.length;i+=100){const id=p.cycleId+'-'+p.dispatchId+'-'+i;eventIds.push(id);tx.create(db.doc(`organizations/${p.actor.organizationId}/mailEvents/${id}`),{organizationId:p.actor.organizationId,cycleId:p.cycleId,jobs:p.jobs.slice(i,i+100),status:'queued',attempts:0,createdAt:p.now,createdBy:p.actor.uid})}
+    const batches:MailJob[][]=[];let batch:MailJob[]=[];let bytes=0
+    for(const job of p.jobs){const size=Buffer.byteLength(JSON.stringify(job));if(batch.length && (batch.length>=100 || bytes+size>700000)){batches.push(batch);batch=[];bytes=0}batch.push(job);bytes+=size}if(batch.length)batches.push(batch)
+    if(batches.length>450)throw new HttpsError('failed-precondition','המשלוח גדול מדי. פנו למנהל המערכת.')
+    for(const [i,jobs] of batches.entries()){const id=p.cycleId+'-'+p.dispatchId+'-'+i;eventIds.push(id);tx.create(db.doc(`organizations/${p.actor.organizationId}/mailEvents/${id}`),{organizationId:p.actor.organizationId,cycleId:p.cycleId,jobs,status:'queued',attempts:0,createdAt:p.now,createdBy:p.actor.uid})}
     tx.create(p.dispatchRef,{signature:p.signature,audience:p.audience,eventIds,notificationIds:p.jobs.map(j=>j.notificationId),createdAt:p.now,createdBy:p.actor.uid})
     tx.create(db.collection(`organizations/${p.actor.organizationId}/nativAuditEvents`).doc(),{organizationId:p.actor.organizationId,actorId:p.actor.uid,action:'results.sent.'+p.audience,entityType:'AssignmentCycle',entityId:p.cycleId,occurredAt:p.now,reason:'שליחה מפורשת של '+p.jobs.length+' הודעות לאחר תצוגה מקדימה'})
     return {alreadyQueued:false}
