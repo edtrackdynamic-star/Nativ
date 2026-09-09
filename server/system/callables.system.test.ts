@@ -50,6 +50,9 @@ describe('Nativ callable system flow', () => {
     const getCycle = httpsCallable<{ cycleId: string }, AssignmentCycle>(functions, 'getCycle')
     const cycle = (await getCycle({ cycleId: demoCycle.id })).data
     expect(cycle).toMatchObject({ id: demoCycle.id, status: 'choice_open', version: 1 })
+    const roster = httpsCallable<{ cycleId: string }, Array<{ id: string; classLabel: string; status: string }>>(functions, 'getStudentRoster')
+    const students = (await roster({ cycleId: demoCycle.id })).data
+    expect(students).toContainEqual(expect.objectContaining({ id: 'student-demo-001', classLabel: 'ז׳1', status: 'not_submitted' }))
   })
 
   it('authenticates a student, saves a canonical draft, submits it, and blocks management', async () => {
@@ -103,6 +106,8 @@ describe('Nativ callable system flow', () => {
   it('runs anonymous AI review, deterministic placement, publication, and a two-step appeal change', async () => {
     const generate = httpsCallable<{ cycleId: string }, WorkflowState>(functions, 'generateAiEvaluations')
     let workflow = (await generate({ cycleId: demoCycle.id })).data
+    const repeated = (await generate({ cycleId: demoCycle.id })).data
+    expect(repeated.aiEvaluations.map((entry) => entry.id)).toEqual(workflow.aiEvaluations.map((entry) => entry.id))
     expect(workflow.aiEvaluations).toHaveLength(2)
     expect(workflow.aiEvaluations.every((entry) => entry.anonymousStudentRef.startsWith('anon-'))).toBe(true)
 
@@ -203,6 +208,12 @@ describe('Nativ callable system flow', () => {
     const secretary = users.find((user) => user.email === 'secretary@nativ.demo')!
     const setAccess = httpsCallable<Record<string, unknown>, { roles: string[] }>(functions, 'setUserAccess')
     const ownUser = users.find((user) => user.email === 'access@nativ.demo')!
+    await expect(setAccess({ uid: ownUser.uid, roles: ['access_manager'], active: false })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+    const studentUser = users.find((user) => user.email === 'student@nativ.demo')!
+    expect(studentUser).toBeTruthy()
+    await expect(setAccess({ uid: studentUser.uid, roles: ['placement_coordinator'], active: true })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+    const roster = httpsCallable<{ cycleId: string }, unknown[]>(functions, 'getStudentRoster')
+    await expect(roster({ cycleId: demoCycle.id })).rejects.toMatchObject({ code: 'functions/permission-denied' })
     await expect(setAccess({ uid: ownUser.uid, roles: [], active: true })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
     const updated = (await setAccess({ uid: secretary.uid, roles: ['secretary', 'placement_coordinator', 'access_manager'], active: true })).data
     expect(updated.roles).toEqual(['secretary', 'placement_coordinator', 'access_manager'])

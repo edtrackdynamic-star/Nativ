@@ -10,7 +10,7 @@ export interface AiEvaluation {
   sourceSubmissionId: string
   sourceSubmissionVersion: number
   input: { rankings: { courseId: string; rank: number }[]; rationale?: string }
-  raw: { priority: AiPriority; summary: string; model: 'local-mock-v1'; evaluatedAt: string }
+  raw: { priority: AiPriority; summary: string; model: string; evaluatedAt: string }
   approved?: { priority: AiPriority; summary: string; approvedAt: string; approvedBy: string; reason: string }
 }
 

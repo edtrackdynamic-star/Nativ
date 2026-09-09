@@ -2,6 +2,7 @@ import type { CallableRequest } from 'firebase-functions/v2/https'
 import { HttpsError } from 'firebase-functions/v2/https'
 import { capabilityIds, roleIds, type ActorContext, type CapabilityId, type RoleId } from '../../src/domain/access'
 import { coreFirestore, nativFirestore } from './firebase'
+import { effectiveProductRoles } from '../../src/domain/userRoles'
 
 type CallableAuth = NonNullable<CallableRequest['auth']>
 
@@ -56,7 +57,9 @@ export interface ResolvedActor extends ActorContext {
 export async function actorFromRequest(request: CallableRequest, operation: 'read' | 'write' = 'write'): Promise<ResolvedActor> {
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const actor = actorFromAuth(request.auth)
-    return { ...actor, accessMode: 'full', coreRole: actor.roles.includes('student') ? 'student' : 'teacher', displayName: '', email: String(request.auth?.token.email ?? '') }
+    const coreRole = actor.roles.includes('student') ? 'student' : 'teacher'
+    const roles = effectiveProductRoles(coreRole, actor.roles)
+    return { ...actor, roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], accessMode: 'full', coreRole, displayName: '', email: String(request.auth?.token.email ?? '') }
   }
   if (!request.auth) throw new HttpsError('unauthenticated', 'נדרשת כניסה למערכת')
   const organizationId = String(request.auth.token.organizationId ?? '').trim().toLowerCase()
@@ -78,7 +81,7 @@ export async function actorFromRequest(request: CallableRequest, operation: 'rea
   }
   const accessData = productAccess.data()
   const assignedRoles = accessData?.active === false ? [] : allowedValues<RoleId>(accessData?.roles, roleIds)
-  const roles = membershipData?.role === 'student' && accessData?.active !== false ? [...new Set<RoleId>(['student', ...assignedRoles])] : assignedRoles
+  const roles = effectiveProductRoles(String(membershipData?.role ?? ''), assignedRoles, accessData?.active !== false)
   const capabilities = [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))]
   return {
     uid: request.auth.uid,

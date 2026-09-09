@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto'
+import { defineSecret } from 'firebase-functions/params'
+import { evaluateWithGemini, GEMINI_MODEL, sanitizeRationale } from '../../server/gemini/evaluation'
+import { createHash, randomUUID } from 'node:crypto'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
 import { getAuth } from 'firebase-admin/auth'
 import type { ActorContext, CapabilityId } from '../../src/domain/access'
@@ -8,7 +10,6 @@ import type { Course, CycleCatalogSnapshot } from '../../src/domain/catalog'
 import type { AssignmentCycle } from '../../src/domain/cycle'
 import type { PreferenceSubmission } from '../../src/domain/preferences'
 import type { AiEvaluation, AppealImpactAnalysis, AppealRecord, NotificationRecord, WorkflowState } from '../../src/domain/workflow'
-import { redactDirectIdentifiers } from '../../src/integrations/ai/privacy'
 import { catalogSnapshotDocumentPath, courseCatalogDocumentPath, cycleDocumentPath, organizationCollectionPath, workflowDocumentPath } from '../../server/firestore/paths'
 import type { MailJob } from '../../server/mail/delivery'
 import { callableOptions, coreFirestore, nativFirestore as firestore } from './firebase'
@@ -32,7 +33,7 @@ function history(current: WorkflowState, actor: ActorContext, action: string, re
 
 interface StudentAssignmentProfile { displayLabel: string; classId?: string; classLabel?: string }
 
-async function studentAssignmentProfiles(organizationId: string, studentIds: string[]): Promise<Map<string, StudentAssignmentProfile>> {
+export async function studentAssignmentProfiles(organizationId: string, studentIds: string[]): Promise<Map<string, StudentAssignmentProfile>> {
   const uniqueIds = [...new Set(studentIds)]
   if (!uniqueIds.length) return new Map()
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
@@ -122,7 +123,8 @@ export const getWorkflow = onCall(callableOptions, async (request) => {
   return { ...workflow, history: [], aiEvaluations: [], assignmentRun: undefined, appeals: [], notifications: [] }
 })
 
-export const generateAiEvaluations = onCall(callableOptions, async (request) => {
+const geminiSecret = defineSecret('GEMINI_API_KEY')
+export const generateAiEvaluations = onCall({ ...callableOptions, secrets: [geminiSecret], timeoutSeconds: 540 }, async (request) => {
   const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.ai.review')
   const cycleId = requiredString(inputRecord(request.data), 'cycleId')
@@ -131,26 +133,68 @@ export const generateAiEvaluations = onCall(callableOptions, async (request) => 
     firestore.collection(organizationCollectionPath(actor.organizationId, 'submissions')).where('cycleId', '==', cycleId).get(),
   ])
   const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
-  if (!cycle || !['choice_closed', 'assignment'].includes(cycle.status)) throw new HttpsError('failed-precondition', 'יש לסגור את הבחירה לפני הערכת AI')
-  if (process.env.FUNCTIONS_EMULATOR !== 'true') throw new HttpsError('failed-precondition', 'הערכת AI טרם הופעלה במערכת זו')
-  const submissions = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission))
+  if (!cycle || !['choice_closed', 'assignment'].includes(cycle.status)) throw new HttpsError('failed-precondition', 'יש לסגור את הבחירה לפני הערכת ההעדפות')
+  const submissions = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission)).sort((a, b) => a.id.localeCompare(b.id))
   if (!submissions.length) throw new HttpsError('failed-precondition', 'אין הגשות סופיות להערכה')
-  const now = new Date().toISOString()
-  return firestore.runTransaction(async (transaction) => {
-    const reference = workflowRef(actor, cycleId)
-    const snapshot = await transaction.get(reference)
-    const current = snapshot.exists ? snapshot.data() as WorkflowState : emptyWorkflow(actor, cycleId, now)
-    if (current.aiBatchCreatedAt) throw new HttpsError('already-exists', 'הערכת AI כבר נוצרה עבור גרסאות הגשה אלה')
-    const evaluations: AiEvaluation[] = submissions.flatMap((submission) => submission.preferences.map((preference) => {
-      const sanitizedRationale = redactDirectIdentifiers(preference.rationale ?? '').sanitizedText.trim()
-      const result = mockEvaluation(sanitizedRationale)
-      return { id: randomUUID(), anonymousStudentRef: `anon-${randomUUID()}`, studentId: submission.studentId, clusterId: preference.clusterId, sourceSubmissionId: submission.id, sourceSubmissionVersion: submission.submissionVersion, input: { rankings: preference.rankings, ...(sanitizedRationale ? { rationale: sanitizedRationale } : {}) }, raw: { ...result, model: 'local-mock-v1' as const, evaluatedAt: now } }
-    }))
-    const nextVersion = current.version + (snapshot.exists ? 1 : 0)
-    const next = { ...current, version: nextVersion, aiBatchCreatedAt: now, aiEvaluations: evaluations, updatedAt: now, updatedBy: actor.uid, history: [...(current.history ?? []), { id: randomUUID(), action: 'ai.batch.generated', actorId: actor.uid, occurredAt: now, reason: 'יצירת הערכה אנונימית חד-פעמית לגרסאות ההגשה הסופיות', workflowVersion: nextVersion }] }
-    transaction.set(reference, next)
-    return next
+  const signature = createHash('sha256').update(JSON.stringify(submissions.map((entry) => [entry.id, entry.version, entry.submissionVersion]))).digest('hex')
+  const jobRef = firestore.doc(`organizations/${actor.organizationId}/aiGenerationJobs/${encodeURIComponent(cycleId)}`)
+  const token = randomUUID()
+  const cached = await firestore.runTransaction(async (transaction) => {
+    const [job, workflow] = await Promise.all([transaction.get(jobRef), transaction.get(workflowRef(actor, cycleId))])
+    if (workflow.data()?.aiBatchCreatedAt) return null
+    if (Number(job.data()?.leaseUntil ?? 0) > Date.now()) throw new HttpsError('already-exists', 'הערכת ההעדפות כבר מתבצעת. יש לרענן בעוד כמה דקות.')
+    if (job.exists && job.data()?.signature !== signature) throw new HttpsError('failed-precondition', 'גרסאות ההגשה השתנו. יש לבדוק את המחזור לפני המשך ההערכה.')
+    transaction.set(jobRef, { signature, token, leaseUntil: Date.now() + 600000 }, { merge: true })
+    return (job.data()?.evaluations ?? []) as AiEvaluation[]
   })
+  if (cached === null) return (await workflowRef(actor, cycleId).get()).data() as WorkflowState
+  try {
+    const profiles = await studentAssignmentProfiles(actor.organizationId, submissions.map((entry) => entry.studentId))
+    const identities = [...profiles.values()].flatMap((entry) => [entry.displayLabel, entry.classLabel ?? ''])
+    const evaluations: AiEvaluation[] = [...cached]
+    const pending = submissions.flatMap((submission) => submission.preferences.map((preference) => ({ submission, preference })))
+      .filter(({ submission, preference }) => !evaluations.some((entry) => entry.sourceSubmissionId === submission.id && entry.clusterId === preference.clusterId))
+    const deadline = Date.now() + 420000
+    for (let offset = 0; offset < pending.length; offset += 12) {
+      if (Date.now() > deadline) throw new Error('ההתקדמות נשמרה. יש ללחוץ שוב כדי להשלים את ההערכות שנותרו.')
+      const batch = pending.slice(offset, offset + 12).map(({ submission, preference }) => ({ submission, preference, id: randomUUID(), rationale: sanitizeRationale(preference.rationale ?? '', identities) }))
+      const nonempty = batch.filter((entry) => entry.rationale)
+      const results = process.env.FUNCTIONS_EMULATOR === 'true' ? nonempty.map((entry) => ({ id: entry.id, ...mockEvaluation(entry.rationale) }))
+        : nonempty.length ? await evaluateWithGemini(geminiSecret.value(), nonempty.map((entry) => ({ id: entry.id, rationale: entry.rationale, rankings: entry.preference.rankings.map((ranking) => ranking.rank) }))) : []
+      const now = new Date().toISOString()
+      evaluations.push(...batch.map(({ submission, preference, id, rationale }): AiEvaluation => {
+        const result = results.find((entry) => entry.id === id) ?? { priority: 'neutral' as const, summary: 'לא נמסר נימוק; ההערכה ניטרלית.' }
+        return { id, anonymousStudentRef: 'anon-' + id, studentId: submission.studentId, clusterId: preference.clusterId,
+          sourceSubmissionId: submission.id, sourceSubmissionVersion: submission.submissionVersion,
+          input: { rankings: preference.rankings, ...(rationale ? { rationale } : {}) },
+          raw: { priority: result.priority, summary: sanitizeRationale(result.summary, identities), model: process.env.FUNCTIONS_EMULATOR === 'true' ? 'local-mock-v1' : rationale ? GEMINI_MODEL : 'neutral-no-rationale', evaluatedAt: now } }
+      }))
+      await firestore.runTransaction(async (transaction) => {
+        const job = await transaction.get(jobRef)
+        if (job.data()?.token !== token) throw new HttpsError('aborted', 'ההערכה עודכנה ממקום אחר. יש לרענן.')
+        transaction.update(jobRef, { evaluations })
+      })
+    }
+    return await firestore.runTransaction(async (transaction) => {
+      const reference = workflowRef(actor, cycleId)
+      const [snapshot, currentCycle, job] = await Promise.all([transaction.get(reference), transaction.get(cycleSnapshot.ref), transaction.get(jobRef)])
+      if (currentCycle.data()?.version !== cycle.version || job.data()?.token !== token) throw new HttpsError('aborted', 'המחזור השתנה. יש לרענן לפני המשך העבודה.')
+      const now = new Date().toISOString()
+      const current = snapshot.exists ? snapshot.data() as WorkflowState : emptyWorkflow(actor, cycleId, now)
+      if (current.aiBatchCreatedAt) return current
+      const next = { ...current, version: current.version + 1, aiBatchCreatedAt: now, aiEvaluations: evaluations, updatedAt: now, updatedBy: actor.uid, history: history(current, actor, 'ai.batch.generated', 'הערכות ההעדפות הוכנו לבדיקת הרכז', now) }
+      transaction.set(reference, next)
+      transaction.update(jobRef, { leaseUntil: 0, completedAt: now })
+      return next
+    })
+  } catch (error) {
+    await firestore.runTransaction(async (transaction) => {
+      const job = await transaction.get(jobRef)
+      if (job.data()?.token === token) transaction.update(jobRef, { leaseUntil: 0 })
+    })
+    if (error instanceof HttpsError) throw error
+    throw new HttpsError('unavailable', error instanceof Error && /[א-ת]/u.test(error.message) ? error.message : 'ההערכה לא הושלמה. ההתקדמות נשמרה וניתן לנסות שוב.')
+  }
 })
 
 export const approveAiEvaluation = onCall(callableOptions, async (request) => {

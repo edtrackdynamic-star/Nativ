@@ -6,6 +6,7 @@ import { roleIds, type CapabilityId, type RoleId } from '../../src/domain/access
 import { auditEventDocumentPath } from '../../server/firestore/paths'
 import { callableOptions, coreFirestore, nativFirestore } from './firebase'
 import { actorFromRequest, inputRecord, requiredString, roleCapabilityMap } from './request'
+import { canAssignStaffRoles, effectiveProductRoles } from '../../src/domain/userRoles'
 
 export interface AccessUserSummary { uid: string; email?: string; displayName?: string; roles: RoleId[]; capabilities: CapabilityId[]; active: boolean; coreRole?: string }
 
@@ -46,8 +47,9 @@ export const listAccessUsers = onCall(callableOptions, async (request) => {
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const result = await getAuth().listUsers(1000)
     return result.users.filter((user) => user.customClaims?.organizationId === actor.organizationId).map((user): AccessUserSummary => {
-      const roles = validRoles(user.customClaims?.roles)
-      return { uid: user.uid, email: user.email, displayName: user.displayName, roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], active: user.customClaims?.active === true }
+      const coreRole = validRoles(user.customClaims?.roles).includes('student') ? 'student' : 'teacher'
+      const roles = effectiveProductRoles(coreRole, validRoles(user.customClaims?.roles), user.customClaims?.active === true)
+      return { uid: user.uid, email: user.email, displayName: user.displayName, coreRole, roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], active: user.customClaims?.active === true }
     })
   }
   const [members, assignments] = await Promise.all([
@@ -59,7 +61,7 @@ export const listAccessUsers = onCall(callableOptions, async (request) => {
     const memberData = member.data()
     const access = accessByUid.get(member.id)
     const assignedRoles = access?.active === false ? [] : validRoles(access?.roles)
-    const roles = memberData.role === 'student' && access?.active !== false ? [...new Set<RoleId>(['student', ...assignedRoles])] : assignedRoles
+    const roles = effectiveProductRoles(String(memberData.role ?? ''), assignedRoles, memberData.active === true && access?.active !== false)
     return { uid: member.id, email: String(memberData.email ?? ''), displayName: String(memberData.fullName ?? ''), roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], active: memberData.active === true && access?.active !== false, coreRole: String(memberData.role ?? '') }
   })
 })
@@ -72,22 +74,25 @@ export const setUserAccess = onCall(callableOptions, async (request) => {
   const capabilities = [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))]
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const user = await getAuth().getUser(uid)
+    const isStudent = validRoles(user.customClaims?.roles).includes('student')
+    if (isStudent && roles.length) throw new HttpsError('failed-precondition', 'לא ניתן להקצות תפקידי צוות לתלמיד')
     if (user.customClaims?.organizationId !== actor.organizationId) throw new HttpsError('permission-denied', 'אין הרשאה לשנות משתמש מארגון אחר')
-    if ((validRoles(user.customClaims?.roles).includes('access_manager')) && !roles.includes('access_manager')) {
+    if ((validRoles(user.customClaims?.roles).includes('access_manager')) && (!roles.includes('access_manager') || data.active === false)) {
       const members = await getAuth().listUsers(1000)
       const anotherManager = members.users.some((entry) => entry.uid !== uid && entry.customClaims?.organizationId === actor.organizationId && entry.customClaims?.active === true && validRoles(entry.customClaims?.roles).includes('access_manager'))
       if (!anotherManager) throw new HttpsError('failed-precondition', 'לא ניתן להסיר את מנהל הגישה הפעיל האחרון')
     }
-    await getAuth().setCustomUserClaims(uid, { ...user.customClaims, organizationId: actor.organizationId, roles, capabilities, active: data.active !== false })
+    await getAuth().setCustomUserClaims(uid, { ...user.customClaims, organizationId: actor.organizationId, roles: isStudent ? ['student'] : roles, capabilities, active: data.active !== false })
     const auditId = randomUUID()
     await nativFirestore.doc(auditEventDocumentPath(actor.organizationId, auditId)).create({ id: auditId, organizationId: actor.organizationId, actorId: actor.uid, occurredAt: new Date().toISOString(), action: 'access.roles.updated', entityType: 'UserAccess', entityId: uid, reason: `תפקידים קודמים: ${JSON.stringify(user.customClaims?.roles ?? [])}; תפקידים חדשים: ${JSON.stringify(roles)}` })
     return { uid, roles, capabilities, active: data.active !== false }
   }
   const membership = await coreFirestore.doc(`organizations/${actor.organizationId}/members/${uid}`).get()
   if (!membership.exists || membership.data()?.active !== true) throw new HttpsError('permission-denied', 'המשתמש אינו חבר פעיל בארגון')
+  if (roles.length && !canAssignStaffRoles(String(membership.data()?.role ?? ''))) throw new HttpsError('failed-precondition', 'תפקידי צוות ניתנים להקצאה למורים ולמנהלים בלבד')
   const reference = nativFirestore.doc(`organizations/${actor.organizationId}/accessAssignments/${uid}`)
   const previous = await reference.get()
-  if (validRoles(previous.data()?.roles).includes('access_manager') && !roles.includes('access_manager')) {
+  if (validRoles(previous.data()?.roles).includes('access_manager') && (!roles.includes('access_manager') || data.active === false)) {
     const anotherManager = await nativFirestore.collection(`organizations/${actor.organizationId}/accessAssignments`).where('roles', 'array-contains', 'access_manager').where('active', '==', true).limit(2).get()
     if (!anotherManager.docs.some((entry) => entry.id !== uid)) throw new HttpsError('failed-precondition', 'לא ניתן להסיר את מנהל הגישה הפעיל האחרון')
   }

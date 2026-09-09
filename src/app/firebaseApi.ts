@@ -9,7 +9,7 @@ import type { CapabilityId, RoleId } from '../domain/access'
 import { nativFunctions } from '../infrastructure/firebase/client'
 
 export interface DemoAccount { label: string; email: string; password: string }
-export interface AccessUserSummary { uid: string; email?: string; displayName?: string; roles: RoleId[]; capabilities: CapabilityId[]; active: boolean }
+export interface AccessUserSummary { uid: string; email?: string; displayName?: string; coreRole?: string; roles: RoleId[]; capabilities: CapabilityId[]; active: boolean }
 export interface NativSessionAccess { organizationId: string; roles: RoleId[]; capabilities: CapabilityId[]; accessMode: 'full' | 'read_only'; coreRole: string; displayName: string; email: string }
 export interface GoogleAccessOption { id: string; name: string; role: string }
 
@@ -96,7 +96,11 @@ export async function getWorkflow(cycleId: string, view?: 'student' | 'coordinat
 }
 
 export async function generateAiEvaluations(cycleId: string): Promise<WorkflowState> {
-  return (await httpsCallable<{ cycleId: string }, WorkflowState>(functionsClient(), 'generateAiEvaluations')({ cycleId })).data
+  return (await httpsCallable<{ cycleId: string }, WorkflowState>(functionsClient(), 'generateAiEvaluations', { timeout: 540000 })({ cycleId })).data
+}
+
+export async function getStudentRoster(cycleId: string): Promise<import('../domain/studentRoster').StudentRosterEntry[]> {
+  return (await httpsCallable<{ cycleId: string }, import('../domain/studentRoster').StudentRosterEntry[]>(functionsClient(), 'getStudentRoster')({ cycleId })).data
 }
 
 export async function approveAiEvaluation(cycleId: string, evaluationId: string, priority: AiPriority, summary: string): Promise<WorkflowState> {

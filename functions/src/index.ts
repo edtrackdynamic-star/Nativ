@@ -19,6 +19,7 @@ const service = new NativCommandService(new FirestoreNativRepository(firestore))
 export { analyzeAppeal, approveAiEvaluation, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, publishAssignments, recommendAppeal, runAssignment, submitAppeal } from './workflowCallables'
 export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
 export { deliverNativMail } from './mailDelivery'
+export { getStudentRoster } from './studentRoster'
 
 function mapError(error: unknown): never {
   if (error instanceof HttpsError) throw error
@@ -37,7 +38,7 @@ function parsePreferences(value: unknown): ClusterPreference[] {
 
 export const getPreparationStatus = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request, 'read')
-  return { status: process.env.FUNCTIONS_EMULATOR === 'true' ? 'local_mvp' : 'cloud_connected', organizationId: actor.organizationId, roles: actor.roles, accessMode: actor.accessMode, liveDataConnected: process.env.FUNCTIONS_EMULATOR !== 'true', edTrackDirectoryConnected: process.env.FUNCTIONS_EMULATOR !== 'true', geminiConnected: false }
+  return { status: process.env.FUNCTIONS_EMULATOR === 'true' ? 'local_mvp' : 'cloud_connected', organizationId: actor.organizationId, roles: actor.roles, accessMode: actor.accessMode, liveDataConnected: process.env.FUNCTIONS_EMULATOR !== 'true', edTrackDirectoryConnected: process.env.FUNCTIONS_EMULATOR !== 'true', geminiConnected: process.env.FUNCTIONS_EMULATOR !== 'true' }
 })
 
 export const getCycle = onCall(callableOptions, async (request) => {
@@ -156,7 +157,7 @@ export const getInstructorWorkspace = onCall(callableOptions, async (request) =>
   const publishedAssignments = workflow?.assignmentRun?.publishedAt ? workflow.assignmentRun.assignments : []
   return {
     cycle: { schoolYear: cycle.schoolYear, termLabel: cycle.termLabel, status: cycle.status },
-    courses: courses.map((course) => ({ id: course.id, label: course.label, description: course.description, subjectArea: course.subjectArea, students: publishedAssignments.filter((assignment) => assignment.courseId === course.id).map((assignment) => assignment.studentLabel ?? 'תלמיד') })),
+    courses: courses.map((course) => ({ id: course.id, label: course.label, description: course.description, subjectArea: course.subjectArea, students: publishedAssignments.filter((assignment) => assignment.courseId === course.id).map((assignment) => [assignment.studentLabel ?? 'תלמיד', assignment.studentClassLabel].filter(Boolean).join(' · ')) })),
   }
 })
 
