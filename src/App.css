@@ -267,3 +267,29 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .instructor-results { display: grid; max-height: 220px; overflow: auto; gap: 6px; margin-top: 8px; }
 .instructor-results button { text-align: start; min-height: 44px; overflow-wrap: anywhere; }
 .table-import .setup-course { overflow-wrap: anywhere; }
+
+/* Compact authenticated workspace navigation. */
+.work-shell .topbar { padding-block: 10px; min-height: 76px; }
+.work-shell .mvp-shell { padding-top: 12px; }
+.account-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 20px; min-width: 0; }
+.account-name { color: var(--ink-muted); font-size: .95rem; }
+.account-heading { margin-bottom: 10px; }
+.work-shell .main-navigation { margin: 8px 0; }
+.work-shell .role-navigation button { min-height: 44px; padding: 6px 14px; }
+.cycle-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-block: 12px; }
+.cycle-toolbar .year-navigation { margin: 0; flex: 0 0 auto; }
+.cycle-toolbar .cycle-picker { flex: 1 1 300px; min-width: 0; margin: 0; }
+.cycle-toolbar .cycle-picker select { flex: 1; width: 0; min-width: 0; text-overflow: ellipsis; }
+.cycle-toolbar > button { min-height: 44px; padding: 8px 16px; }
+.work-shell .process-navigation { margin: 8px 0 0; border-radius: 12px 12px 0 0; }
+.work-shell .process-navigation + .workspace-boundary .workspace-card { margin-top: 0; border-start-start-radius: 0; }
+@media (max-width: 560px) {
+  .account-title { gap: 4px; flex-direction: column; align-items: start; }
+  .account-heading { gap: 8px; }
+  .cycle-toolbar { gap: 8px; }
+  .cycle-toolbar .cycle-picker { order: -1; flex-basis: 100%; }
+  .cycle-toolbar .year-navigation { flex: 1; min-width: 0; }
+  .cycle-toolbar .year-navigation button { padding-inline: 8px; white-space: normal; }
+  .work-shell .main-navigation { gap: 4px; }
+  .work-shell .main-navigation button { padding-inline: 10px; }
+}
