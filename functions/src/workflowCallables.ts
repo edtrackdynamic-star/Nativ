@@ -30,16 +30,30 @@ function history(current: WorkflowState, actor: ActorContext, action: string, re
   return [...(current.history ?? []), { id: randomUUID(), action, actorId: actor.uid, occurredAt: now, reason, workflowVersion: current.version + 1 }]
 }
 
-async function studentDisplayLabels(organizationId: string, studentIds: string[]): Promise<Map<string, string>> {
+interface StudentAssignmentProfile { displayLabel: string; classId?: string; classLabel?: string }
+
+async function studentAssignmentProfiles(organizationId: string, studentIds: string[]): Promise<Map<string, StudentAssignmentProfile>> {
   const uniqueIds = [...new Set(studentIds)]
+  if (!uniqueIds.length) return new Map()
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     return new Map(await Promise.all(uniqueIds.map(async (uid) => {
-      try { const user = await getAuth().getUser(uid); return [uid, user.displayName || user.email || 'תלמיד'] as const }
-      catch { return [uid, 'תלמיד'] as const }
+      try {
+        const user = await getAuth().getUser(uid)
+        return [uid, { displayLabel: user.displayName || user.email || 'תלמיד', classId: String(user.customClaims?.classId ?? '') || undefined, classLabel: String(user.customClaims?.classLabel ?? '') || undefined }] as const
+      } catch { return [uid, { displayLabel: 'תלמיד', classId: undefined, classLabel: undefined }] as const }
     })))
   }
-  const snapshots = await coreFirestore.getAll(...uniqueIds.map((uid) => coreFirestore.doc(`organizations/${organizationId}/members/${uid}`)))
-  return new Map(snapshots.map((snapshot) => [snapshot.id, String(snapshot.data()?.fullName ?? 'תלמיד')]))
+  const [members, students] = await Promise.all([
+    coreFirestore.getAll(...uniqueIds.map((uid) => coreFirestore.doc(`organizations/${organizationId}/members/${uid}`))),
+    coreFirestore.getAll(...uniqueIds.map((uid) => coreFirestore.doc(`organizations/${organizationId}/students/${uid}`))),
+  ])
+  const classIds = [...new Set(uniqueIds.map((uid, index) => String(students[index].data()?.classId ?? members[index].data()?.classIds?.[0] ?? '')).filter(Boolean))]
+  const classSnapshots = classIds.length ? await coreFirestore.getAll(...classIds.map((classId) => coreFirestore.doc(`organizations/${organizationId}/classes/${classId}`))) : []
+  const classLabels = new Map(classSnapshots.map((snapshot) => [snapshot.id, String(snapshot.data()?.name ?? '')]))
+  return new Map(uniqueIds.map((uid, index) => {
+    const classId = String(students[index].data()?.classId ?? members[index].data()?.classIds?.[0] ?? '')
+    return [uid, { displayLabel: String(members[index].data()?.fullName ?? 'תלמיד'), classId: classId || undefined, classLabel: classLabels.get(classId) || String(students[index].data()?.className ?? '') || undefined }]
+  }))
 }
 
 function mockEvaluation(rationale: string | undefined): { priority: AiPriority; summary: string } {
@@ -167,9 +181,10 @@ export const runAssignment = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.assignment.manage')
   const cycleId = requiredString(inputRecord(request.data), 'cycleId')
-  const [cycleSnapshot, workflowSnapshot, catalogSnapshot, submissionsSnapshot] = await Promise.all([
+  const [cycleSnapshot, workflowSnapshot, catalogSnapshot, cycleCatalogSnapshot, submissionsSnapshot] = await Promise.all([
     firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)).get(), workflowRef(actor, cycleId).get(),
     firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId)).get(),
+    firestore.doc(catalogSnapshotDocumentPath(actor.organizationId, cycleId)).get(),
     firestore.collection(organizationCollectionPath(actor.organizationId, 'submissions')).where('cycleId', '==', cycleId).get(),
   ])
   const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
@@ -177,11 +192,12 @@ export const runAssignment = onCall(callableOptions, async (request) => {
   if (cycle?.status !== 'assignment') throw new HttpsError('failed-precondition', 'המחזור חייב להיות במצב שיבוץ')
   if (!workflow || !workflow.aiEvaluations.length || workflow.aiEvaluations.some((evaluation) => !evaluation.approved)) throw new HttpsError('failed-precondition', 'יש לאשר את כל פלטי ה-AI לפני השיבוץ')
   const courses = (catalogSnapshot.data()?.courses ?? []) as Course[]
+  const catalog = cycleCatalogSnapshot.data() as CycleCatalogSnapshot | undefined
   const submissions = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission))
-  const labels = await studentDisplayLabels(actor.organizationId, submissions.map((submission) => submission.studentId))
-  const students: AssignmentStudent[] = submissions.map((submission) => ({ studentId: submission.studentId, displayLabel: labels.get(submission.studentId) ?? 'תלמיד', submission, approvedAiByCluster: Object.fromEntries(workflow.aiEvaluations.filter((evaluation) => evaluation.studentId === submission.studentId && evaluation.approved).map((evaluation) => [evaluation.clusterId, evaluation.approved!.priority])) }))
-  const calculated = runDeterministicAssignment({ cycleId, clusterIds: [...new Set(courses.map((course) => course.clusterId))], courses, students })
-  const result = { ...calculated, assignments: calculated.assignments.map((assignment) => ({ ...assignment, studentLabel: labels.get(assignment.studentId) ?? 'תלמיד' })) }
+  const profiles = await studentAssignmentProfiles(actor.organizationId, submissions.map((submission) => submission.studentId))
+  const students: AssignmentStudent[] = submissions.map((submission) => { const profile = profiles.get(submission.studentId); return { studentId: submission.studentId, displayLabel: profile?.displayLabel ?? 'תלמיד', classId: profile?.classId, classLabel: profile?.classLabel, submission, approvedAiByCluster: Object.fromEntries(workflow.aiEvaluations.filter((evaluation) => evaluation.studentId === submission.studentId && evaluation.approved).map((evaluation) => [evaluation.clusterId, evaluation.approved!.priority])) } })
+  const calculated = runDeterministicAssignment({ cycleId, clusterIds: [...new Set(courses.map((course) => course.clusterId))], courses, students, balanceByClassClusterIds: catalog?.clusters.filter((cluster) => cluster.balanceByClass).map((cluster) => cluster.clusterId) })
+  const result = { ...calculated, assignments: calculated.assignments.map((assignment) => ({ ...assignment, studentLabel: profiles.get(assignment.studentId)?.displayLabel ?? 'תלמיד', studentClassLabel: profiles.get(assignment.studentId)?.classLabel })) }
   const now = new Date().toISOString()
   return firestore.runTransaction(async (transaction) => {
     const reference = workflowRef(actor, cycleId)

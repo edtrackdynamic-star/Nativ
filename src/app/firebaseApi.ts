@@ -11,6 +11,7 @@ import { nativFunctions } from '../infrastructure/firebase/client'
 export interface DemoAccount { label: string; email: string; password: string }
 export interface AccessUserSummary { uid: string; email?: string; displayName?: string; roles: RoleId[]; capabilities: CapabilityId[]; active: boolean }
 export interface NativSessionAccess { organizationId: string; roles: RoleId[]; capabilities: CapabilityId[]; accessMode: 'full' | 'read_only'; coreRole: string; displayName: string; email: string }
+export interface GoogleAccessOption { id: string; name: string; role: string }
 
 function functionsClient() {
   if (!nativFunctions) throw new Error('Firebase אינו מוגדר בסביבה זו')
@@ -23,6 +24,14 @@ export async function seedDemoEnvironment(): Promise<{ cycleId: string; accounts
 
 export async function getMyNativAccess(): Promise<NativSessionAccess> {
   return (await httpsCallable<undefined, NativSessionAccess>(functionsClient(), 'getMyNativAccess')()).data
+}
+
+export async function listGoogleAccessOptions(): Promise<GoogleAccessOption[]> {
+  return (await httpsCallable<Record<string, never>, { organizations: GoogleAccessOption[] }>(functionsClient(), 'getGoogleAccessOptions')({})).data.organizations
+}
+
+export async function exchangeGoogleIdentity(organizationId: string): Promise<string> {
+  return (await httpsCallable<{ organizationId: string }, { customToken: string }>(functionsClient(), 'exchangeGoogleIdentity')({ organizationId })).data.customToken
 }
 
 export async function claimInitialAccessManager(): Promise<void> {
@@ -46,15 +55,15 @@ export async function createCycle(schoolYear: string, termLabel: string): Promis
 }
 
 export interface CatalogCourseDraft { label: string; description: string; subjectArea: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: 'allowed' | 'approval_required' | 'discouraged' | 'prohibited' }
-export interface CatalogClusterDraft { label: string; requiredRankingCount: number; courses: CatalogCourseDraft[] }
+export interface CatalogClusterDraft { label: string; requiredRankingCount: number; balanceByClass: boolean; courses: CatalogCourseDraft[] }
 export async function saveCycleCatalog(cycleId: string, clusters: CatalogClusterDraft[]): Promise<void> {
   await httpsCallable<Record<string, unknown>, unknown>(functionsClient(), 'saveCycleCatalog')({ cycleId, clusters })
 }
 export async function listEligibleInstructors(): Promise<Array<{ uid: string; displayName: string }>> {
   return (await httpsCallable<undefined, Array<{ uid: string; displayName: string }>>(functionsClient(), 'listEligibleInstructors')()).data
 }
-export async function getCycleCatalog(cycleId: string): Promise<{ catalog: { clusters: Array<{ clusterId: string; label: string; requiredRankingCount: number }> } | null; courses: Array<{ id: string; clusterId: string; label: string; description: string; subjectArea: string; instructorIds: string[]; capacity: { minimum: number; target: number; maximum: number }; repeatPolicy: CatalogCourseDraft['repeatPolicy'] }> }> {
-  return (await httpsCallable<Record<string, unknown>, { catalog: { clusters: Array<{ clusterId: string; label: string; requiredRankingCount: number }> } | null; courses: Array<{ id: string; clusterId: string; label: string; description: string; subjectArea: string; instructorIds: string[]; capacity: { minimum: number; target: number; maximum: number }; repeatPolicy: CatalogCourseDraft['repeatPolicy'] }> }>(functionsClient(), 'getCycleCatalog')({ cycleId })).data
+export async function getCycleCatalog(cycleId: string): Promise<{ catalog: { clusters: Array<{ clusterId: string; label: string; requiredRankingCount: number; balanceByClass?: boolean }> } | null; courses: Array<{ id: string; clusterId: string; label: string; description: string; subjectArea: string; instructorIds: string[]; capacity: { minimum: number; target: number; maximum: number }; repeatPolicy: CatalogCourseDraft['repeatPolicy'] }> }> {
+  return (await httpsCallable<Record<string, unknown>, { catalog: { clusters: Array<{ clusterId: string; label: string; requiredRankingCount: number; balanceByClass?: boolean }> } | null; courses: Array<{ id: string; clusterId: string; label: string; description: string; subjectArea: string; instructorIds: string[]; capacity: { minimum: number; target: number; maximum: number }; repeatPolicy: CatalogCourseDraft['repeatPolicy'] }> }>(functionsClient(), 'getCycleCatalog')({ cycleId })).data
 }
 
 export interface InstructorWorkspaceData { cycle: { schoolYear: string; termLabel: string; status: CycleStatus }; courses: Array<{ id: string; label: string; description: string; subjectArea: string; students: string[] }> }

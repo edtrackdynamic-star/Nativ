@@ -31,4 +31,20 @@ describe('runDeterministicAssignment', () => {
     const result = runDeterministicAssignment({ cycleId: 'cycle', clusterIds: ['cluster'], courses, students, constraints: [{ studentId: 's', clusterId: 'cluster', type: 'must_assign', courseId: 'a', note: 'צורך פדגוגי' }] })
     expect(result.assignments[0]).toMatchObject({ studentId: 's', courseId: 'a', source: 'hard_constraint' })
   })
+
+  it('keeps class balancing disabled unless the cluster explicitly enables it', () => {
+    const students = [student('s1', 'a', 'neutral'), student('s2', 'a', 'neutral')]
+    const input = { cycleId: 'cycle', clusterIds: ['cluster'], courses: [course('a'), course('b')], students }
+    expect(runDeterministicAssignment(input)).toEqual(runDeterministicAssignment({ ...input, balanceByClassClusterIds: [] }))
+  })
+
+  it('spreads students from each homeroom across courses when enabled', () => {
+    const students = ['א', 'ב'].flatMap((classId) => Array.from({ length: 4 }, (_, index) => ({ ...student(`${classId}-${index}`, 'a', 'neutral'), classId, classLabel: `כיתה ${classId}` })))
+    const result = runDeterministicAssignment({ cycleId: 'cycle', clusterIds: ['cluster'], courses: [course('a', 4, 4), course('b', 4, 4)], students, balanceByClassClusterIds: ['cluster'] })
+    for (const courseId of ['a', 'b']) {
+      const assignedIds = new Set(result.assignments.filter((entry) => entry.courseId === courseId).map((entry) => entry.studentId))
+      expect(students.filter((entry) => assignedIds.has(entry.studentId) && entry.classId === 'א')).toHaveLength(2)
+      expect(students.filter((entry) => assignedIds.has(entry.studentId) && entry.classId === 'ב')).toHaveLength(2)
+    }
+  })
 })

@@ -14,6 +14,7 @@ export interface ClusterSnapshot {
   clusterId: string
   label: string
   requiredRankingCount: number
+  balanceByClass?: boolean
   courses: CourseSnapshot[]
 }
 

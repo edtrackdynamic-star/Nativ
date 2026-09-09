@@ -11,6 +11,7 @@ export interface Cluster extends VersionedEntity {
   eligibleGradeIds: string[]
   displayOrder: number
   requiredRankingCount: number
+  balanceByClass?: boolean
 }
 
 export interface CourseCapacity {

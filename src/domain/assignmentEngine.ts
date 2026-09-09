@@ -6,6 +6,8 @@ export type AiPriority = 'high' | 'medium' | 'neutral'
 export interface AssignmentStudent {
   studentId: string
   displayLabel: string
+  classId?: string
+  classLabel?: string
   submission?: { preferences: ClusterPreference[] }
   approvedAiByCluster?: Record<string, AiPriority>
   previouslyCompletedLogicalCourseIds?: string[]
@@ -22,6 +24,7 @@ export interface HardConstraint {
 export interface AssignmentResult {
   studentId: string
   studentLabel?: string
+  studentClassLabel?: string
   clusterId: string
   courseId: string
   rank: number | null
@@ -59,6 +62,7 @@ export function runDeterministicAssignment(input: {
   courses: Course[]
   students: AssignmentStudent[]
   constraints?: HardConstraint[]
+  balanceByClassClusterIds?: string[]
 }): AssignmentRunResult {
   const assignments: AssignmentResult[] = []
   const warnings: string[] = []
@@ -69,10 +73,15 @@ export function runDeterministicAssignment(input: {
     const courses = input.courses.filter((course) => course.clusterId === clusterId && course.published)
     const assigned = new Set<string>()
     const constraints = input.constraints?.filter((constraint) => constraint.clusterId === clusterId) ?? []
+    const balanceByClass = input.balanceByClassClusterIds?.includes(clusterId) ?? false
+    const classEnrollmentByCourse: Record<string, Record<string, number>> = Object.fromEntries(courses.map((course) => [course.id, {}]))
+    const classCount = (student: AssignmentStudent, course: Course) => student.classId ? (classEnrollmentByCourse[course.id]?.[student.classId] ?? 0) : 0
+    const classDifference = (left: AssignmentStudent, right: AssignmentStudent, course: Course) => left.classId && right.classId ? classCount(left, course) - classCount(right, course) : 0
     const allowed = (student: AssignmentStudent, course: Course) => isRepeatAllowed(course, student) && !constraints.some((constraint) => constraint.studentId === student.studentId && constraint.courseId === course.id && constraint.type === 'must_not_assign')
     const add = (student: AssignmentStudent, course: Course, rank: number | null, source: AssignmentResult['source'], explanation: string) => {
       assignments.push({ studentId: student.studentId, clusterId, courseId: course.id, rank, source, aiPriority: student.approvedAiByCluster?.[clusterId] ?? 'neutral', explanation })
       enrollmentByCourse[course.id] += 1
+      if (student.classId) classEnrollmentByCourse[course.id][student.classId] = (classEnrollmentByCourse[course.id][student.classId] ?? 0) + 1
       assigned.add(student.studentId)
     }
 
@@ -92,17 +101,23 @@ export function runDeterministicAssignment(input: {
           const limit = phase === 'target' ? course.capacity.target : course.capacity.maximum
           const available = limit - enrollmentByCourse[course.id]
           if (available <= 0) continue
-          const candidates = submitters.filter((student) => !assigned.has(student.studentId) && allowed(student, course) && student.submission?.preferences.find((preference) => preference.clusterId === clusterId)?.rankings.some((ranking) => ranking.rank === rank && ranking.courseId === course.id)).sort((left, right) => {
-            const priorityDifference = priorityValue[right.approvedAiByCluster?.[clusterId] ?? 'neutral'] - priorityValue[left.approvedAiByCluster?.[clusterId] ?? 'neutral']
-            return priorityDifference || deterministicKey(`${clusterId}|${course.id}|${rank}|${phase}|${left.studentId}`).localeCompare(deterministicKey(`${clusterId}|${course.id}|${rank}|${phase}|${right.studentId}`))
-          })
-          candidates.slice(0, available).forEach((student) => add(student, course, rank, 'ranked_choice', `בחירה בדירוג ${rank}; שלב ${phase === 'target' ? 'יעד' : 'מקסימום'}`))
-          if (candidates.length > available) tieBreaks.push(`${clusterId}|${course.id}|${rank}|${phase}`)
+          const candidates = submitters.filter((student) => !assigned.has(student.studentId) && allowed(student, course) && student.submission?.preferences.find((preference) => preference.clusterId === clusterId)?.rankings.some((ranking) => ranking.rank === rank && ranking.courseId === course.id))
+          const candidateCount = candidates.length
+          for (let index = 0; index < available && candidates.length; index += 1) {
+            candidates.sort((left, right) => {
+              const priorityDifference = priorityValue[right.approvedAiByCluster?.[clusterId] ?? 'neutral'] - priorityValue[left.approvedAiByCluster?.[clusterId] ?? 'neutral']
+              const balanceDifference = balanceByClass ? classDifference(left, right, course) : 0
+              return priorityDifference || balanceDifference || deterministicKey(`${clusterId}|${course.id}|${rank}|${phase}|${left.studentId}`).localeCompare(deterministicKey(`${clusterId}|${course.id}|${rank}|${phase}|${right.studentId}`))
+            })
+            const student = candidates.shift()!
+            add(student, course, rank, 'ranked_choice', `בחירה בדירוג ${rank}; שלב ${phase === 'target' ? 'יעד' : 'מקסימום'}${balanceByClass ? '; איזון כיתות' : ''}`)
+          }
+          if (candidateCount > available) tieBreaks.push(`${clusterId}|${course.id}|${rank}|${phase}`)
         }
       }
     }
 
-    const chooseFallback = (student: AssignmentStudent, label: string) => courses.filter((course) => enrollmentByCourse[course.id] < course.capacity.maximum && allowed(student, course)).map((course) => ({ course, gap: course.capacity.target - enrollmentByCourse[course.id], count: enrollmentByCourse[course.id], key: deterministicKey(`${clusterId}|${label}|${student.studentId}|${course.id}`) })).sort((left, right) => right.gap - left.gap || left.count - right.count || left.key.localeCompare(right.key))[0]?.course
+    const chooseFallback = (student: AssignmentStudent, label: string) => courses.filter((course) => enrollmentByCourse[course.id] < course.capacity.maximum && allowed(student, course)).map((course) => ({ course, gap: course.capacity.target - enrollmentByCourse[course.id], classCount: classCount(student, course), count: enrollmentByCourse[course.id], key: deterministicKey(`${clusterId}|${label}|${student.studentId}|${course.id}`) })).sort((left, right) => right.gap - left.gap || (balanceByClass ? left.classCount - right.classCount : 0) || left.count - right.count || left.key.localeCompare(right.key))[0]?.course
     for (const student of submitters.filter((entry) => !assigned.has(entry.studentId))) {
       const course = chooseFallback(student, 'fallback')
       if (course) add(student, course, null, 'fallback_submitter', 'שיבוץ משלים לאחר מיצוי הקורסים שדורגו')

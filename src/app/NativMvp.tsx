@@ -1,4 +1,4 @@
-import { GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut, type User } from 'firebase/auth'
+import { GoogleAuthProvider, onAuthStateChanged, signInWithCustomToken, signInWithEmailAndPassword, signInWithPopup, signOut, type User } from 'firebase/auth'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { RoleId } from '../domain/access'
 import type { AssignmentCycle } from '../domain/cycle'
@@ -8,7 +8,7 @@ import { AppealReviewerWorkspace } from './AppealReviewerWorkspace'
 import { CoordinatorWorkflowWorkspace } from './CoordinatorWorkflowWorkspace'
 import { CycleSetupWorkspace } from './CycleSetupWorkspace'
 import { InstructorWorkspace } from './InstructorWorkspace'
-import { claimInitialAccessManager, getMyNativAccess, listCycles, seedDemoEnvironment, type DemoAccount, type NativSessionAccess } from './firebaseApi'
+import { claimInitialAccessManager, exchangeGoogleIdentity, getMyNativAccess, listCycles, listGoogleAccessOptions, seedDemoEnvironment, type DemoAccount, type GoogleAccessOption, type NativSessionAccess } from './firebaseApi'
 import { SecretaryWorkspace } from './SecretaryWorkspace'
 import { StudentPreferenceWorkspace } from './StudentPreferenceWorkspace'
 
@@ -21,10 +21,15 @@ function friendlyError(error: unknown, fallback: string) {
   return error.message.replace(/\s*\[\d+\]\s*$/, '').replace(/^Firebase:\s*/u, '')
 }
 
+function needsGoogleIdentityExchange(error: unknown) {
+  return error instanceof Error && error.message.includes('לא נמצא שיוך ארגוני פעיל')
+}
+
 export function NativMvp() {
   const [accounts, setAccounts] = useState<DemoAccount[]>([])
   const [session, setSession] = useState<SessionProfile | null>(null)
   const [authenticatedUser, setAuthenticatedUser] = useState<User | null>(null)
+  const [organizationOptions, setOrganizationOptions] = useState<GoogleAccessOption[]>([])
   const [selectedArea, setSelectedArea] = useState<RoleId | null>(null)
   const [cycles, setCycles] = useState<AssignmentCycle[]>([])
   const [selectedCycleId, setSelectedCycleId] = useState<string | null>(null)
@@ -39,6 +44,7 @@ export function NativMvp() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       const requestId = ++authRequest.current
       setAuthenticatedUser(user)
+      setOrganizationOptions([])
       setSession(null)
       setSelectedArea(null)
       setCycles([])
@@ -46,7 +52,26 @@ export function NativMvp() {
       setCreatingCycle(false)
       if (!user) return
       setMessage('טוען את סביבת העבודה שלך…')
-      void getMyNativAccess().then((access) => {
+      void (async () => {
+        try {
+          return await getMyNativAccess()
+        } catch (accessError) {
+          if (emulatorMode || !needsGoogleIdentityExchange(accessError) || !user.providerData.some((provider) => provider.providerId === 'google.com')) throw accessError
+          const options = await listGoogleAccessOptions()
+          if (!options.length) throw new Error('חשבון Google זה אינו משויך לבית ספר פעיל ב־EdTrack.')
+          if (options.length > 1) {
+            if (authRequest.current === requestId) {
+              setOrganizationOptions(options)
+              setMessage('בחרו את בית הספר שאליו תרצו להיכנס.')
+            }
+            return null
+          }
+          const customToken = await exchangeGoogleIdentity(options[0].id)
+          if (authRequest.current === requestId) await signInWithCustomToken(auth, customToken)
+          return null
+        }
+      })().then((access) => {
+        if (!access) return
         if (authRequest.current !== requestId || auth.currentUser?.uid !== user.uid) return
         setSession({ user, access })
         setSelectedArea(areaOrder.find((role) => access.roles.includes(role)) ?? null)
@@ -73,6 +98,16 @@ export function NativMvp() {
     catch (error) { setMessage(friendlyError(error, 'הכניסה נכשלה.')) }
     finally { setPending(false) }
   }
+  async function enterOrganization(option: GoogleAccessOption) {
+    if (!nativAuth || pending) return
+    try {
+      setPending(true)
+      setMessage(`נכנס לבית הספר ${option.name}…`)
+      const customToken = await exchangeGoogleIdentity(option.id)
+      await signInWithCustomToken(nativAuth, customToken)
+    } catch (error) { setMessage(friendlyError(error, 'לא ניתן להיכנס לבית הספר שנבחר.')) }
+    finally { setPending(false) }
+  }
   async function activateInitialManager() {
     if (pending) return
     try { setPending(true); await claimInitialAccessManager(); const access = await getMyNativAccess(); if (session) setSession({ ...session, access }); setSelectedArea('access_manager'); setMessage('ניהול הגישה הופעל לחשבון זה.') }
@@ -85,6 +120,7 @@ export function NativMvp() {
     <div className="workspace-heading"><div><span className="eyebrow">החשבון שלך</span><h2 id="mvp-title">{authenticatedUser ? 'סביבת העבודה' : 'כניסה לנתיב'}</h2></div>{authenticatedUser && <button type="button" className="text-action" onClick={() => void logout()}>יציאה</button>}</div>
     <p className="workspace-message" aria-live="polite">{message}</p>
     {!authenticatedUser && !emulatorMode && <button type="button" className="primary-action" disabled={pending} onClick={() => void loginWithGoogle()}>כניסה עם Google</button>}
+    {authenticatedUser && !session && organizationOptions.length > 1 && <div className="workspace-card"><h3>בחירת בית ספר</h3><div className="organization-options">{organizationOptions.map((option) => <button type="button" className="secondary-action" disabled={pending} key={option.id} onClick={() => void enterOrganization(option)}>{option.name}</button>)}</div></div>}
     {!authenticatedUser && emulatorMode && <div className="demo-login-grid">{accounts.map((account) => <button type="button" disabled={pending} key={account.email} onClick={() => void login(account)}><span>{account.label.slice(0, 1)}</span><strong>כניסה כ{account.label}</strong></button>)}</div>}
     {session && !session.access.roles.length && <div className="workspace-card"><h3>עדיין לא הוקצה לך תפקיד בנתיב</h3><p>מנהל הגישה בבית הספר יכול להקצות לך תפקיד מתאים.</p>{session.access.coreRole === 'school_admin' && <button type="button" className="primary-action" disabled={pending} onClick={() => void activateInitialManager()}>הפעלת מנהל הגישה הראשון</button>}</div>}
     {session?.access.accessMode === 'read_only' && <p className="read-only-notice">המידע זמין לצפייה בלבד. לא ניתן לבצע שינויים כעת.</p>}

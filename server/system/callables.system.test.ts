@@ -250,6 +250,7 @@ describe('Nativ callable system flow', () => {
     const getCatalog = httpsCallable<{ cycleId: string }, { catalog: { clusters: unknown[] }; courses: unknown[] }>(functions, 'getCycleCatalog')
     const catalog = (await getCatalog({ cycleId: created.id })).data
     expect(catalog.catalog.clusters).toHaveLength(1)
+    expect(catalog.catalog.clusters[0]).toMatchObject({ balanceByClass: false })
     expect(catalog.courses).toHaveLength(1)
 
     const listCycles = httpsCallable<undefined, AssignmentCycle[]>(functions, 'listCycles')

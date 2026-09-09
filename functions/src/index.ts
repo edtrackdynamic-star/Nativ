@@ -80,7 +80,7 @@ export const createCycle = onCall(callableOptions, async (request) => {
 })
 
 interface CatalogCourseInput { label: string; description?: string; subjectArea?: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: RepeatPolicy }
-interface CatalogClusterInput { label: string; requiredRankingCount: number; courses: CatalogCourseInput[] }
+interface CatalogClusterInput { label: string; requiredRankingCount: number; balanceByClass?: boolean; courses: CatalogCourseInput[] }
 
 export const saveCycleCatalog = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request)
@@ -105,7 +105,7 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
       courses.push({ ...base, id: courseId, cycleId, clusterId, logicalCourseId: courseId, label: courseLabel, description: String(course.description ?? '').trim(), subjectArea: String(course.subjectArea ?? '').trim(), instructorIds, slot: `slot-${clusterIndex + 1}`, eligibleGradeIds: [], capacity: { minimum: course.minimum, target: course.target, maximum: course.maximum }, repeatPolicy: course.repeatPolicy, published: true })
       return { courseId, logicalCourseId: courseId, label: courseLabel }
     })
-    return { clusterId, label, requiredRankingCount: cluster.requiredRankingCount, courses: snapshotCourses }
+    return { clusterId, label, requiredRankingCount: cluster.requiredRankingCount, balanceByClass: cluster.balanceByClass === true, courses: snapshotCourses }
   })
   const catalog: CycleCatalogSnapshot = { ...base, id: `catalog-${cycleId}`, cycleId, clusters: catalogClusters }
   return firestore.runTransaction(async (transaction) => {
@@ -267,7 +267,7 @@ const demoAccounts = [
   },
   {
     label: 'תלמיד', email: 'student@nativ.demo', password: 'NativDemo!2026', uid: 'student-demo-001',
-    claims: { organizationId: demoCycle.organizationId, active: true, roles: ['student'], capabilities: [] },
+    claims: { organizationId: demoCycle.organizationId, active: true, roles: ['student'], capabilities: [], classId: 'class-demo-7a', classLabel: 'ז׳1' },
   },
   {
     label: 'בודקת ערעורים', email: 'appeals@nativ.demo', password: 'NativDemo!2026',

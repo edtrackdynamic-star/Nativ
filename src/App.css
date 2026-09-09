@@ -7,17 +7,18 @@
 }
 .topbar { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 22px 0; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .brand { display: inline-flex; align-items: center; gap: 12px; color: var(--ink-strong); text-decoration: none; }
-.brand-mark { width: 44px; height: 44px; display: grid; place-items: center; color: white; border-radius: 14px; background: linear-gradient(145deg, var(--brand-indigo), var(--brand-cyan)); box-shadow: 0 10px 26px rgba(79, 70, 229, 0.24); }
-.route-mark { width: 31px; height: 31px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; }
-.route-mark circle { fill: currentColor; stroke: none; }
+.brand-mark { width: 56px; height: 56px; display: grid; place-items: center; overflow: hidden; border-radius: 16px; background: white; box-shadow: 0 10px 26px rgba(79, 70, 229, 0.2); }
+.brand-mark img { width: 100%; height: 100%; object-fit: cover; transform: scale(1.35); }
 .brand strong { display: block; font-size: 1.35rem; line-height: 1.05; }
 .brand small { display: block; margin-top: 4px; color: var(--ink-muted); font-size: 0.72rem; }
+.brand .brand-byline { display: block; margin-top: 3px; color: var(--ink-muted); font-size: 0.68rem; }
 .environment-badge, .status-pill { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255, 255, 255, 0.78); color: var(--ink-muted); font-size: 0.78rem; font-weight: 700; backdrop-filter: blur(10px); }
 main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70px; }
 .hero-panel { min-height: 360px; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr); gap: 48px; align-items: center; padding: 64px clamp(30px, 6vw, 82px); overflow: hidden; color: white; border-radius: 32px; background: linear-gradient(125deg, #0f172a 0%, #172554 58%, #312e81 100%); box-shadow: 0 30px 80px rgba(15, 23, 42, 0.18); }
 .eyebrow { color: var(--brand-cyan); font-size: 0.78rem; font-weight: 800; letter-spacing: 0.04em; }
 .hero-panel h1 { max-width: 720px; margin: 14px 0 20px; font-size: clamp(2.4rem, 5vw, 4.7rem); line-height: 1.04; letter-spacing: -0.055em; }
 .hero-panel p { max-width: 680px; margin: 0; color: #cbd5e1; font-size: 1.08rem; line-height: 1.8; }
+.hero-byline { display: block; margin-top: 14px; color: #a5f3fc; font-size: 0.84rem; font-weight: 700; }
 .hero-visual { display: flex; align-items: center; justify-content: center; direction: rtl; }
 .route-node { width: 82px; height: 82px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.22); border-radius: 50%; background: rgba(255,255,255,.08); color: #dbeafe; font-size: .78rem; font-weight: 800; box-shadow: inset 0 0 0 7px rgba(255,255,255,.025); }
 .route-node.active { background: linear-gradient(145deg, var(--brand-indigo), var(--brand-cyan)); color: white; border-color: transparent; }
@@ -136,6 +137,15 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .cycle-picker select { min-height: 42px; padding: 0 12px; border: 1px solid #cbd5e1; border-radius: 10px; background: white; }
 .setup-cluster { display: grid; gap: 12px; margin-top: 16px; padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: #f8fafc; }
 .setup-course { padding: 14px; border-radius: 13px; background: white; }
+.setup-option { display: flex; align-items: flex-start; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: white; }
+.setup-option input { width: 18px; height: 18px; margin-top: 2px; }
+.setup-option span, .setup-option small { display: block; }
+.setup-option small { margin-top: 4px; color: var(--ink-muted); line-height: 1.45; }
+.class-balance-summary { margin: 18px 0; padding: 16px; border: 1px solid #bae6fd; border-radius: 14px; background: #f0f9ff; }
+.class-balance-summary h4 { margin: 0 0 12px; }
+.class-balance-summary section + section { margin-top: 14px; }
+.class-balance-summary p { margin: 6px 0 0; }
+.warning-list { color: #92400e; }
 .setup-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .setup-grid label { display: grid; gap: 6px; font-size: .8rem; font-weight: 800; }
 .setup-grid input, .setup-grid select { width: 100%; min-height: 42px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 10px; background: white; }

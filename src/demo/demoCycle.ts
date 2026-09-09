@@ -21,8 +21,8 @@ export const demoCycle: AssignmentCycle = {
 }
 
 export const demoClusters: Cluster[] = [
-  { ...baseMetadata, id: 'cluster-arts', cycleId: demoCycle.id, label: 'אמנויות', slot: 'slot-a', eligibleGradeIds: ['grade-7'], displayOrder: 1, requiredRankingCount: 3 },
-  { ...baseMetadata, id: 'cluster-tech', cycleId: demoCycle.id, label: 'טכנולוגיה ומדע', slot: 'slot-b', eligibleGradeIds: ['grade-7'], displayOrder: 2, requiredRankingCount: 3 },
+  { ...baseMetadata, id: 'cluster-arts', cycleId: demoCycle.id, label: 'אמנויות', slot: 'slot-a', eligibleGradeIds: ['grade-7'], displayOrder: 1, requiredRankingCount: 3, balanceByClass: false },
+  { ...baseMetadata, id: 'cluster-tech', cycleId: demoCycle.id, label: 'טכנולוגיה ומדע', slot: 'slot-b', eligibleGradeIds: ['grade-7'], displayOrder: 2, requiredRankingCount: 3, balanceByClass: false },
 ]
 
 function demoCourse(id: string, clusterId: string, logicalCourseId: string, label: string, subjectArea: string): Course {
@@ -52,6 +52,7 @@ export const demoCatalogSnapshot: CycleCatalogSnapshot = {
     clusterId: cluster.id,
     label: cluster.label,
     requiredRankingCount: cluster.requiredRankingCount,
+    balanceByClass: cluster.balanceByClass,
     courses: demoCourses
       .filter((course) => course.clusterId === cluster.id)
       .map((course) => ({ courseId: course.id, logicalCourseId: course.logicalCourseId, label: course.label })),
