@@ -28,6 +28,14 @@ export function workflowDocumentPath(organizationId: string, cycleId: string): s
   return `${organizationDocumentPath(organizationId)}/nativWorkflows/${cycleId}`
 }
 
+export function assignmentRunDocumentPath(organizationId: string, cycleId:string, runId: string): string {
+  return `${cycleDocumentPath(organizationId,cycleId)}/assignmentRuns/${segment(runId, 'מזהה הרצה')}`
+}
+
+export function assignmentRunsCollectionPath(organizationId: string, cycleId:string): string {
+  return `${cycleDocumentPath(organizationId,cycleId)}/assignmentRuns`
+}
+
 export function courseCatalogDocumentPath(organizationId: string, cycleId: string): string {
   return `${organizationDocumentPath(organizationId)}/nativCourseCatalogs/${cycleId}`
 }

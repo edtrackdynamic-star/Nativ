@@ -65,6 +65,8 @@ export function runDeterministicAssignment(input: {
   constraints?: HardConstraint[]
   balanceByClassClusterIds?: string[]
   eligibleClassIdsByCluster?: Record<string, string[] | undefined>
+  excludedClassIdsByCluster?: Record<string, string[] | undefined>
+  excludedStudentIdsByCluster?: Record<string, string[] | undefined>
 }): AssignmentRunResult {
   const assignments: AssignmentResult[] = []
   const warnings: string[] = []
@@ -72,7 +74,10 @@ export function runDeterministicAssignment(input: {
   const enrollmentByCourse: Record<string, number> = Object.fromEntries(input.courses.map((course) => [course.id, 0]))
 
   for (const clusterId of input.clusterIds) {
-    const students = input.students.filter(student => includesClass({ eligibleClassIds: input.eligibleClassIdsByCluster?.[clusterId] }, student.classId))
+    const excludedClasses = new Set(input.excludedClassIdsByCluster?.[clusterId] ?? [])
+    const excludedStudents = new Set(input.excludedStudentIdsByCluster?.[clusterId] ?? [])
+    const students = input.students.filter(student => includesClass({ eligibleClassIds: input.eligibleClassIdsByCluster?.[clusterId] }, student.classId)
+      && !excludedStudents.has(student.studentId) && !(student.classId && excludedClasses.has(student.classId)))
     const courses = input.courses.filter((course) => course.clusterId === clusterId && course.published)
     const assigned = new Set<string>()
     const constraints = input.constraints?.filter((constraint) => constraint.clusterId === clusterId) ?? []

@@ -47,6 +47,20 @@ describe('runDeterministicAssignment', () => {
       expect(students.filter((entry) => assignedIds.has(entry.studentId) && entry.classId === 'ב')).toHaveLength(2)
     }
   })
+
+  it('excludes a class or one student without changing their submitted preferences', () => {
+    const students = [
+      { ...student('a1', 'a', 'neutral'), classId: 'a' },
+      { ...student('a2', 'a', 'neutral'), classId: 'a' },
+      { ...student('b1', 'a', 'neutral'), classId: 'b' },
+    ]
+    const courses = [course('a', 10, 10)]
+    const excludedClass = runDeterministicAssignment({ cycleId:'cycle', clusterIds:['cluster'], courses, students, excludedClassIdsByCluster:{cluster:['a']} })
+    expect(excludedClass.assignments.map(entry=>entry.studentId)).toEqual(['b1'])
+    const excludedStudent = runDeterministicAssignment({ cycleId:'cycle', clusterIds:['cluster'], courses, students, excludedStudentIdsByCluster:{cluster:['a2']} })
+    expect(excludedStudent.assignments.map(entry=>entry.studentId).sort()).toEqual(['a1','b1'])
+    expect(students.every(entry=>entry.submission?.preferences.length===1)).toBe(true)
+  })
 })
 
 it('excludes other classes from ranked and fallback assignments and rejects a forced override', () => {

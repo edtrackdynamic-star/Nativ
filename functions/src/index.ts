@@ -19,7 +19,7 @@ import { actorFromRequest, inputRecord, requiredInteger, requiredString } from '
 
 const service = new NativCommandService(new FirestoreNativRepository(firestore))
 
-export { rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, publishAssignments, recommendAppeal, runAssignment, submitAppeal } from './workflowCallables'
+export { rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, listAssignmentRuns, publishAssignments, recommendAppeal, runAssignment, selectAssignmentRun, submitAppeal } from './workflowCallables'
 export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
 export { deliverNativMail } from './mailDelivery'
 export { getStudentRoster } from './studentRoster'

@@ -16,6 +16,7 @@ export interface AiEvaluation {
 
 export interface AssignmentRun {
   id: string
+  label?: string
   executedAt: string
   executedBy: string
   algorithmVersion: 'legacy-compatible-1.0.0'
@@ -24,9 +25,20 @@ export interface AssignmentRun {
   enrollmentByCourse: Record<string, number>
   warnings: string[]
   tieBreaks: string[]
+  scope?: AssignmentParticipationScope
+  includedStudentClusterCount?: number
+  excludedStudentClusterCount?: number
   approvedAt?: string
   approvedBy?: string
   publishedAt?: string
+  rejectedAt?: string
+  rejectedBy?: string
+  rejectionReason?: string
+}
+
+export interface AssignmentParticipationScope {
+  excludedClassIdsByCluster: Record<string, string[]>
+  excludedStudentIdsByCluster: Record<string, string[]>
 }
 
 export interface AppealImpactAnalysis {

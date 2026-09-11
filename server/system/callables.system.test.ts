@@ -93,6 +93,8 @@ describe('Nativ callable system flow', () => {
     })).rejects.toMatchObject({ code: 'functions/permission-denied' })
     const extractDescriptions = httpsCallable<Record<string, unknown>, unknown>(functions, 'extractCourseDescriptions')
     await expect(extractDescriptions({ kind:'docx',fileName:'courses.docx',base64:'AA==',candidates:[{id:'0-0',label:'קורס',instructorNames:[]}] })).rejects.toMatchObject({ code:'functions/permission-denied' })
+    const listRuns = httpsCallable<{cycleId:string},unknown[]>(functions,'listAssignmentRuns')
+    await expect(listRuns({cycleId:demoCycle.id})).rejects.toMatchObject({code:'functions/permission-denied'})
 
     await signOut(auth)
     const coordinator = accounts.find((account) => account.label === 'רכז שיבוץ')
@@ -124,15 +126,25 @@ describe('Nativ callable system flow', () => {
 
     const transition = httpsCallable<Record<string, unknown>, AssignmentCycle>(functions, 'transitionCycle')
     await transition({ cycleId: demoCycle.id, expectedVersion: 2, to: 'assignment', reason: 'כל ההערכות אושרו', idempotencyKey: 'system-start-assignment' })
-    const run = httpsCallable<{ cycleId: string }, WorkflowState>(functions, 'runAssignment')
-    workflow = (await run({ cycleId: demoCycle.id })).data
+    const run = httpsCallable<Record<string,unknown>, WorkflowState>(functions, 'runAssignment')
+    workflow = (await run({ cycleId: demoCycle.id,label:'הרצה מלאה' })).data
     expect(workflow.assignmentRun?.assignments).toHaveLength(2)
     expect(workflow.assignmentRun).toMatchObject({ algorithmVersion: 'legacy-compatible-1.0.0', seed: 42 })
+    const baselineRunId=workflow.assignmentRun!.id
+    workflow=(await run({cycleId:demoCycle.id,label:'ללא אמנויות לתלמיד ההדגמה',scope:{excludedClassIdsByCluster:{},excludedStudentIdsByCluster:{'cluster-arts':['student-demo-001']}}})).data
+    expect(workflow.assignmentRun).toMatchObject({label:'ללא אמנויות לתלמיד ההדגמה',excludedStudentClusterCount:1})
+    expect(workflow.assignmentRun?.assignments).toHaveLength(1)
     const rejectRun=httpsCallable<Record<string,unknown>,WorkflowState>(functions,'rejectAssignmentRun')
     await expect(rejectRun({cycleId:demoCycle.id,expectedVersion:0,reason:'בדיקה'})).rejects.toMatchObject({code:'functions/aborted'})
     workflow=(await rejectRun({cycleId:demoCycle.id,expectedVersion:workflow.version,reason:'בחינה מחדש לפני פרסום'})).data
     expect(workflow.assignmentRun).toBeUndefined()
-    workflow=(await run({cycleId:demoCycle.id})).data
+    const listRuns=httpsCallable<{cycleId:string},import('../../src/domain/workflow').AssignmentRun[]>(functions,'listAssignmentRuns')
+    const savedRuns=(await listRuns({cycleId:demoCycle.id})).data
+    expect(savedRuns).toHaveLength(2)
+    expect(savedRuns.find(entry=>entry.label==='ללא אמנויות לתלמיד ההדגמה')?.rejectedAt).toBeTruthy()
+    const selectRun=httpsCallable<{cycleId:string;runId:string},WorkflowState>(functions,'selectAssignmentRun')
+    workflow=(await selectRun({cycleId:demoCycle.id,runId:baselineRunId})).data
+    expect(workflow.assignmentRun?.assignments).toHaveLength(2)
     await expect(transition({ cycleId: demoCycle.id, expectedVersion: 3, to: 'published', reason: 'ניסיון לעקוף אישור', idempotencyKey: 'system-publish-bypass-blocked' })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
 
     await signOut(auth)
@@ -174,6 +186,9 @@ describe('Nativ callable system flow', () => {
     await signOut(auth)
     const student = accounts.find((account) => account.label === 'תלמיד')!
     await signInWithEmailAndPassword(auth, student.email, student.password)
+    const publishedStudentWorkflow=(await getStudentWorkflow({cycleId:demoCycle.id,view:'student'})).data
+    expect(publishedStudentWorkflow.assignmentRun?.scope).toBeUndefined()
+    expect(publishedStudentWorkflow.assignmentRun?.label).toBeUndefined()
     const current = workflow.assignmentRun!.assignments.find((entry) => entry.clusterId === 'cluster-arts')!
     const requestedCourseId = current.courseId === 'course-theater' ? 'course-music' : 'course-theater'
     const submitAppeal = httpsCallable<Record<string, unknown>, { id: string }>(functions, 'submitAppeal')

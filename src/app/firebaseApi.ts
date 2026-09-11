@@ -4,7 +4,7 @@ import type { AssignmentCycle, CycleStatus } from '../domain/cycle'
 import type { ClusterPreference, PreferenceSubmission } from '../domain/preferences'
 import type { AuditEvent } from '../domain/types'
 import type { AiPriority } from '../domain/assignmentEngine'
-import type { AppealRecord, WorkflowState } from '../domain/workflow'
+import type { AppealRecord, AssignmentParticipationScope, AssignmentRun, WorkflowState } from '../domain/workflow'
 import type { CapabilityId, RoleId } from '../domain/access'
 import { nativFunctions } from '../infrastructure/firebase/client'
 
@@ -116,8 +116,16 @@ export async function approveAiEvaluation(cycleId: string, evaluationId: string,
   return (await httpsCallable<Record<string, unknown>, WorkflowState>(functionsClient(), 'approveAiEvaluation')({ cycleId, evaluationId, priority, summary, reason: 'בדיקה ואישור של רכז השיבוץ' })).data
 }
 
-export async function runAssignment(cycleId: string): Promise<WorkflowState> {
-  return (await httpsCallable<{ cycleId: string }, WorkflowState>(functionsClient(), 'runAssignment')({ cycleId })).data
+export async function runAssignment(cycleId: string, label = 'הרצת שיבוץ', scope?: AssignmentParticipationScope): Promise<WorkflowState> {
+  return (await httpsCallable<Record<string,unknown>, WorkflowState>(functionsClient(), 'runAssignment')({ cycleId, label, ...(scope?{scope}:{}) })).data
+}
+
+export async function listAssignmentRuns(cycleId:string):Promise<AssignmentRun[]> {
+  return (await httpsCallable<{cycleId:string},AssignmentRun[]>(functionsClient(),'listAssignmentRuns')({cycleId})).data
+}
+
+export async function selectAssignmentRun(cycleId:string,runId:string):Promise<WorkflowState> {
+  return (await httpsCallable<{cycleId:string;runId:string},WorkflowState>(functionsClient(),'selectAssignmentRun')({cycleId,runId})).data
 }
 
 export async function approveAssignmentRun(cycleId: string): Promise<WorkflowState> {

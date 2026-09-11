@@ -10,8 +10,8 @@ import { runDeterministicAssignment } from '../../src/domain/assignmentEngine'
 import type { Course, CycleCatalogSnapshot } from '../../src/domain/catalog'
 import type { AssignmentCycle } from '../../src/domain/cycle'
 import type { PreferenceSubmission } from '../../src/domain/preferences'
-import type { AiEvaluation, AppealImpactAnalysis, AppealRecord, NotificationRecord, WorkflowState } from '../../src/domain/workflow'
-import { catalogSnapshotDocumentPath, courseCatalogDocumentPath, cycleDocumentPath, organizationCollectionPath, workflowDocumentPath } from '../../server/firestore/paths'
+import type { AiEvaluation, AppealImpactAnalysis, AppealRecord, AssignmentParticipationScope, AssignmentRun, NotificationRecord, WorkflowState } from '../../src/domain/workflow'
+import { assignmentRunDocumentPath, assignmentRunsCollectionPath, catalogSnapshotDocumentPath, courseCatalogDocumentPath, cycleDocumentPath, organizationCollectionPath, workflowDocumentPath } from '../../server/firestore/paths'
 import { callableOptions, coreFirestore, nativFirestore as firestore } from './firebase'
 import { actorFromRequest, inputRecord, requiredInteger, requiredString } from './request'
 
@@ -73,6 +73,35 @@ function latestSubmitted(submissions: PreferenceSubmission[]): PreferenceSubmiss
   return [...latest.values()]
 }
 
+function participationScope(value: unknown, clusterIds: Set<string>, studentIds: Set<string>, classIds: Set<string>): AssignmentParticipationScope {
+  const data = value === undefined ? {} : inputRecord(value)
+  const parseMap = (input: unknown, allowedIds: Set<string>, label: string) => {
+    if (input === undefined) return {}
+    const source = inputRecord(input)
+    const result: Record<string, string[]> = {}
+    for (const [clusterId, ids] of Object.entries(source)) {
+      if (!clusterIds.has(clusterId) || !Array.isArray(ids) || ids.some(id=>typeof id!=='string' || !allowedIds.has(id))) throw new HttpsError('invalid-argument', `החרגת ${label} אינה תקינה`)
+      result[clusterId] = [...new Set(ids as string[])]
+    }
+    return result
+  }
+  return {
+    excludedClassIdsByCluster: parseMap(data.excludedClassIdsByCluster, classIds, 'כיתות'),
+    excludedStudentIdsByCluster: parseMap(data.excludedStudentIdsByCluster, studentIds, 'תלמידים'),
+  }
+}
+
+function excludedFromCluster(student: AssignmentStudent, clusterId: string, scope: AssignmentParticipationScope): boolean {
+  return Boolean(scope.excludedStudentIdsByCluster[clusterId]?.includes(student.studentId)
+    || (student.classId && scope.excludedClassIdsByCluster[clusterId]?.includes(student.classId)))
+}
+
+function assignmentRunFromStorage(value:unknown):AssignmentRun {
+  const run={...(value as AssignmentRun&{organizationId?:string;cycleId?:string})}
+  delete run.organizationId;delete run.cycleId
+  return run
+}
+
 async function notificationStatuses(organizationId: string, notifications: NotificationRecord[]): Promise<NotificationRecord[]> {
   const emails = notifications.filter((entry) => entry.channel === 'email' && entry.deliveryEventId)
   const paths = [...new Set(emails.flatMap((entry) => [`organizations/${organizationId}/mailStatuses/${entry.id}`, `organizations/${organizationId}/mailEvents/${entry.deliveryEventId}`]))]
@@ -117,6 +146,7 @@ export const getWorkflow = onCall(callableOptions, async (request) => {
     const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
     const isPublished = Boolean(workflow.assignmentRun?.publishedAt) && Boolean(cycle && ['published', 'appeals', 'closed'].includes(cycle.status))
     const assignmentRun = isPublished && workflow.assignmentRun ? { ...workflow.assignmentRun, executedBy: '', approvedBy: undefined, enrollmentByCourse: {}, warnings: [], tieBreaks: [], assignments: workflow.assignmentRun.assignments.filter((entry) => entry.studentId === actor.uid) } : undefined
+    if(assignmentRun){delete assignmentRun.label;delete assignmentRun.scope;delete assignmentRun.includedStudentClusterCount;delete assignmentRun.excludedStudentClusterCount}
     return { ...workflow, history: [], aiEvaluations: [], assignmentRun, appeals: workflow.appeals.filter((entry) => entry.studentId === actor.uid), notifications: await notificationStatuses(actor.organizationId, workflow.notifications.filter((entry) => entry.recipientRef === actor.uid)) }
   }
   requireCapability(actor, 'nativ.assignment.view')
@@ -224,7 +254,9 @@ export const approveAiEvaluation = onCall(callableOptions, async (request) => {
 export const runAssignment = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.assignment.manage')
-  const cycleId = requiredString(inputRecord(request.data), 'cycleId')
+  const data = inputRecord(request.data)
+  const cycleId = requiredString(data, 'cycleId')
+  const label = typeof data.label === 'string' && data.label.trim() ? data.label.trim().slice(0, 120) : 'הרצת שיבוץ'
   const [cycleSnapshot, workflowSnapshot, catalogSnapshot, cycleCatalogSnapshot, submissionsSnapshot] = await Promise.all([
     firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)).get(), workflowRef(actor, cycleId).get(),
     firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId)).get(),
@@ -234,16 +266,28 @@ export const runAssignment = onCall(callableOptions, async (request) => {
   const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
   const workflow = workflowSnapshot.data() as WorkflowState | undefined
   if (cycle?.status !== 'assignment') throw new HttpsError('failed-precondition', 'המחזור חייב להיות במצב שיבוץ')
-  if (!workflow || !workflow.aiEvaluations.length || workflow.aiEvaluations.some((evaluation) => !evaluation.approved)) throw new HttpsError('failed-precondition', 'יש לאשר את כל פלטי ה-AI לפני השיבוץ')
+  if (!workflow || !workflow.aiEvaluations.length) throw new HttpsError('failed-precondition', 'יש להכין את הערכות ההעדפות לפני השיבוץ')
+  if (workflow.assignmentRun?.publishedAt) throw new HttpsError('failed-precondition', 'לא ניתן ליצור הרצה חדשה לאחר פרסום השיבוץ')
   const courses = (catalogSnapshot.data()?.courses ?? []) as Course[]
   const catalog = cycleCatalogSnapshot.data() as CycleCatalogSnapshot | undefined
   const submissions = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission))
   const profiles = await studentAssignmentProfiles(actor.organizationId, submissions.map((submission) => submission.studentId))
   const students: AssignmentStudent[] = submissions.map((submission) => { const profile = profiles.get(submission.studentId); return { studentId: submission.studentId, displayLabel: profile?.displayLabel ?? 'תלמיד', classId: profile?.classId, classLabel: profile?.classLabel, submission, approvedAiByCluster: Object.fromEntries(workflow.aiEvaluations.filter((evaluation) => evaluation.studentId === submission.studentId && evaluation.approved).map((evaluation) => [evaluation.clusterId, evaluation.approved!.priority])) } })
   if (!catalog || courses.some(course=>!catalog.clusters.some(c=>c.clusterId===course.clusterId))) throw new HttpsError('failed-precondition', 'חסרות הגדרות מקבצים. יש לבדוק את התהליך לפני שיבוץ.')
-  const calculated = runDeterministicAssignment({ cycleId, clusterIds: [...new Set(courses.map((course) => course.clusterId))], courses, students, eligibleClassIdsByCluster: Object.fromEntries(catalog?.clusters.map(c => [c.clusterId, c.eligibleClassIds]) ?? []), balanceByClassClusterIds: catalog?.clusters.filter((cluster) => cluster.balanceByClass).map((cluster) => cluster.clusterId) })
+  const clusterIds = [...new Set(courses.map((course) => course.clusterId))]
+  const scope = participationScope(data.scope, new Set(clusterIds), new Set(students.map(student=>student.studentId)), new Set(students.map(student=>student.classId).filter((id): id is string=>Boolean(id))))
+  const includedEvaluations = workflow.aiEvaluations.filter(evaluation=>{
+    const student=students.find(entry=>entry.studentId===evaluation.studentId)
+    return student && !excludedFromCluster(student,evaluation.clusterId,scope)
+  })
+  if (includedEvaluations.some(evaluation=>!evaluation.approved)) throw new HttpsError('failed-precondition', 'יש לאשר את הערכות ההעדפות של המשתתפים בהרצה')
+  const eligiblePairs = students.flatMap(student=>clusterIds.filter(clusterId=>includesClass({eligibleClassIds:catalog.clusters.find(cluster=>cluster.clusterId===clusterId)?.eligibleClassIds},student.classId)).map(clusterId=>({student,clusterId})))
+  const includedStudentClusterCount = eligiblePairs.filter(({student,clusterId})=>!excludedFromCluster(student,clusterId,scope)).length
+  if (!includedStudentClusterCount) throw new HttpsError('failed-precondition', 'לא נותרו תלמידים לשיבוץ בהרצה זו')
+  const calculated = runDeterministicAssignment({ cycleId, clusterIds, courses, students, eligibleClassIdsByCluster: Object.fromEntries(catalog.clusters.map(c => [c.clusterId, c.eligibleClassIds])), excludedClassIdsByCluster:scope.excludedClassIdsByCluster, excludedStudentIdsByCluster:scope.excludedStudentIdsByCluster, balanceByClassClusterIds: catalog.clusters.filter((cluster) => cluster.balanceByClass).map((cluster) => cluster.clusterId) })
   const result = { ...calculated, assignments: calculated.assignments.map((assignment) => ({ ...assignment, studentLabel: profiles.get(assignment.studentId)?.displayLabel ?? 'תלמיד', studentClassLabel: profiles.get(assignment.studentId)?.classLabel })) }
   const now = new Date().toISOString()
+  const assignmentRun: AssignmentRun = { id:randomUUID(), label, executedAt:now, executedBy:actor.uid, algorithmVersion:'legacy-compatible-1.0.0', seed:42, scope, includedStudentClusterCount, excludedStudentClusterCount:eligiblePairs.length-includedStudentClusterCount, ...result }
   return firestore.runTransaction(async (transaction) => {
     const reference = workflowRef(actor, cycleId)
     const [currentSnapshot, currentCycleSnapshot] = await transaction.getAll(reference, firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)))
@@ -251,10 +295,41 @@ export const runAssignment = onCall(callableOptions, async (request) => {
     const currentCycle = currentCycleSnapshot.data() as AssignmentCycle | undefined
     if (!current || current.version !== workflow.version) throw new HttpsError('aborted', 'המידע השתנה; יש לרענן ולהריץ שוב')
     if (currentCycle?.status !== 'assignment') throw new HttpsError('failed-precondition', 'המחזור אינו במצב שיבוץ')
-    if (current.assignmentRun) throw new HttpsError('already-exists', 'כבר קיימת הרצת שיבוץ; יש לפתוח הרצה חדשה באופן מפורש')
-    const next: WorkflowState = { ...current, assignmentRun: { id: randomUUID(), executedAt: now, executedBy: actor.uid, algorithmVersion: 'legacy-compatible-1.0.0', seed: 42, ...result }, version: current.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(current, actor, 'assignment.run.executed', 'הרצת שיבוץ', now) }
+    if (current.assignmentRun?.publishedAt) throw new HttpsError('failed-precondition', 'לא ניתן ליצור הרצה חדשה לאחר פרסום השיבוץ')
+    const next: WorkflowState = { ...current, assignmentRun, version: current.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(current, actor, 'assignment.run.executed', `הרצת שיבוץ: ${label}`, now) }
+    transaction.create(firestore.doc(assignmentRunDocumentPath(actor.organizationId,cycleId,assignmentRun.id)), { ...assignmentRun, organizationId:actor.organizationId, cycleId })
     transaction.set(reference, next)
     return next
+  })
+})
+
+export const listAssignmentRuns = onCall(callableOptions, async request => {
+  const actor = await actorFromRequest(request, 'read')
+  requireCapability(actor, 'nativ.assignment.manage')
+  const cycleId = requiredString(inputRecord(request.data), 'cycleId')
+  const [runs, workflow] = await Promise.all([
+    firestore.collection(assignmentRunsCollectionPath(actor.organizationId,cycleId)).orderBy('executedAt','desc').limit(20).get(),
+    workflowRef(actor,cycleId).get(),
+  ])
+  const values = runs.docs.map(document=>assignmentRunFromStorage(document.data()))
+  const active = workflow.data()?.assignmentRun as AssignmentRun | undefined
+  if (active && !values.some(run=>run.id===active.id)) values.push(active)
+  return values.sort((left,right)=>right.executedAt.localeCompare(left.executedAt))
+})
+
+export const selectAssignmentRun = onCall(callableOptions, async request => {
+  const actor = await actorFromRequest(request)
+  requireCapability(actor, 'nativ.assignment.manage')
+  const data=inputRecord(request.data),cycleId=requiredString(data,'cycleId'),runId=requiredString(data,'runId')
+  return firestore.runTransaction(async transaction=>{
+    const reference=workflowRef(actor,cycleId), runReference=firestore.doc(assignmentRunDocumentPath(actor.organizationId,cycleId,runId)), cycleReference=firestore.doc(cycleDocumentPath(actor.organizationId,cycleId))
+    const [workflowSnapshot,runSnapshot,cycleSnapshot]=await transaction.getAll(reference,runReference,cycleReference)
+    const current=workflowSnapshot.data() as WorkflowState | undefined, storedRun=runSnapshot.data() as (AssignmentRun&{cycleId?:string}) | undefined
+    if (cycleSnapshot.data()?.status!=='assignment' || !current || current.assignmentRun?.publishedAt) throw new HttpsError('failed-precondition','אפשר לבחור הרצה רק לפני פרסום השיבוץ')
+    if (!storedRun || storedRun.cycleId!==cycleId || storedRun.rejectedAt) throw new HttpsError('not-found','הרצת השיבוץ אינה זמינה לבחירה')
+    const run=assignmentRunFromStorage(storedRun)
+    const now=new Date().toISOString(), next:WorkflowState={...current,assignmentRun:run,version:current.version+1,updatedAt:now,updatedBy:actor.uid,history:history(current,actor,'assignment.run.selected',`נבחרה הרצה: ${run.label??run.id}`,now)}
+    transaction.set(reference,next);return next
   })
 })
 
@@ -270,7 +345,9 @@ export const approveAssignmentRun = onCall(callableOptions, async (request) => {
     const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
     if (cycle?.status !== 'assignment' || !workflow?.assignmentRun || workflow.assignmentRun.publishedAt) throw new HttpsError('failed-precondition', 'אין תוצאת שיבוץ פעילה לאישור')
     if (workflow.assignmentRun.approvedAt) throw new HttpsError('already-exists', 'גרסת השיבוץ כבר אושרה')
-    const next: WorkflowState = { ...workflow, assignmentRun: { ...workflow.assignmentRun, approvedAt: now, approvedBy: actor.uid }, version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'assignment.run.approved', 'אישור מפורש של גרסת השיבוץ לפני פרסום', now) }
+    const approvedRun:AssignmentRun = { ...workflow.assignmentRun, approvedAt: now, approvedBy: actor.uid }
+    const next: WorkflowState = { ...workflow, assignmentRun: approvedRun, version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'assignment.run.approved', 'אישור מפורש של גרסת השיבוץ לפני פרסום', now) }
+    transaction.set(firestore.doc(assignmentRunDocumentPath(actor.organizationId,cycleId,approvedRun.id)),{...approvedRun,organizationId:actor.organizationId,cycleId},{merge:true})
     transaction.set(reference, next)
     return next
   })
@@ -294,9 +371,11 @@ export const publishAssignments = onCall(callableOptions, async (request) => {
       if(!cluster || !course)throw new HttpsError('failed-precondition','חסרים פרטי קורס')
       return {id:randomUUID(),audience:'student',recipientRef:assignment.studentId,channel:'in_app',subject:'השיבוץ שלך פורסם',body:cluster.label+': '+course.label,status:'available',createdAt:now}
     })
-    const nextWorkflow: WorkflowState = { ...workflow, assignmentRun: { ...workflow.assignmentRun, publishedAt: now }, notifications: [...workflow.notifications, ...notifications], version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'assignment.published', 'פרסום נפרד של גרסת השיבוץ המאושרת', now) }
+    const publishedRun:AssignmentRun={...workflow.assignmentRun,publishedAt:now}
+    const nextWorkflow: WorkflowState = { ...workflow, assignmentRun: publishedRun, notifications: [...workflow.notifications, ...notifications], version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'assignment.published', 'פרסום נפרד של גרסת השיבוץ המאושרת', now) }
     const nextCycle = { ...cycle, status: 'published' as const, publishedAt: now, version: cycle.version + 1, updatedAt: now, updatedBy: actor.uid }
     transaction.set(workflowReference, nextWorkflow)
+    transaction.set(firestore.doc(assignmentRunDocumentPath(actor.organizationId,cycleId,publishedRun.id)),{...publishedRun,organizationId:actor.organizationId,cycleId},{merge:true})
     transaction.set(cycleReference, nextCycle)
     return nextWorkflow
   })
@@ -490,7 +569,9 @@ export const rejectAssignmentRun=onCall(callableOptions,async request=>{
     const current=snapshot.data() as WorkflowState
     if(cycle.data()?.status!=='assignment' || !current?.assignmentRun || current.assignmentRun.publishedAt)throw new HttpsError('failed-precondition','אפשר לדחות רק הצעת שיבוץ שטרם פורסמה')
     if(current.version!==data.expectedVersion)throw new HttpsError('aborted','השיבוץ השתנה. יש לרענן לפני דחייה.')
-    const now=new Date().toISOString();tx.create(firestore.doc(`organizations/${actor.organizationId}/rejectedAssignmentRuns/${current.assignmentRun.id}`),{...current.assignmentRun,cycleId,rejectedBy:actor.uid,rejectedAt:now,reason})
+    const now=new Date().toISOString(),rejectedRun:AssignmentRun={...current.assignmentRun,rejectedBy:actor.uid,rejectedAt:now,rejectionReason:reason}
+    tx.set(firestore.doc(assignmentRunDocumentPath(actor.organizationId,cycleId,rejectedRun.id)),{...rejectedRun,organizationId:actor.organizationId,cycleId},{merge:true})
+    tx.create(firestore.doc(`organizations/${actor.organizationId}/rejectedAssignmentRuns/${current.assignmentRun.id}`),{...rejectedRun,cycleId,reason})
     const {assignmentRun: _run,...rest}=current
     const next:WorkflowState={...rest,version:current.version+1,updatedAt:now,updatedBy:actor.uid,history:history(current,actor,'assignment.rejected',reason,now)}
     tx.set(reference,next);return next

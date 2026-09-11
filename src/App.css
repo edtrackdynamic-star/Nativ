@@ -317,3 +317,17 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .description-review td:first-child > * { display: block; margin-block: 4px; }
 .description-review select, .description-review textarea { width: 100%; box-sizing: border-box; }
 .description-review textarea { resize: vertical; min-width: 280px; }
+.scenario-planner { display:grid; gap:16px; border:1px solid var(--line); border-radius:16px; padding:18px; background:#f8fafc; }
+.scenario-planner > label,.scenario-planner details > label { display:grid; gap:8px; }
+.scenario-planner input[type="text"],.scenario-planner input:not([type]) { width:100%; box-sizing:border-box; }
+.scenario-planner details { border:1px solid var(--line); border-radius:12px; padding:12px; background:white; }
+.scenario-planner summary { cursor:pointer; font-weight:800; padding-block:6px; }
+.scenario-matrix table,.scenario-history table { width:100%; min-width:650px; border-collapse:collapse; background:white; }
+.scenario-matrix caption { text-align:start; font-weight:800; padding:10px 0; }
+.scenario-matrix th,.scenario-matrix td,.scenario-history th,.scenario-history td { border:1px solid var(--line); padding:10px; text-align:center; vertical-align:middle; }
+.scenario-matrix th:first-child,.scenario-history th:first-child { text-align:start; }
+.scenario-matrix input[type="checkbox"] { width:22px; height:22px; }
+.scenario-history th small,.scenario-history th .status-pill { display:block; width:max-content; margin-top:5px; }
+.selected-run-summary { margin-top:18px; padding:14px 18px; border-inline-start:4px solid #278d91; background:#edf5f8; border-radius:12px; }
+.selected-run-summary h3,.selected-run-summary p { margin-block:4px; }
+@media(max-width:560px){.scenario-planner{padding:12px}.scenario-planner .workspace-actions>button{flex:1 1 100%}}
