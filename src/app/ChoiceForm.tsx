@@ -11,7 +11,7 @@ export function ChoiceForm({ clusters, design = defaultFormDesign, preferences, 
     <header className="choice-form-header">
       {form.coverUrl && <img className="form-cover" src={form.coverUrl} alt="" />}
       <h2>{form.title}</h2>{form.introduction && <p className="formatted-text">{form.introduction}</p>}
-      {form.documentUrl && <a href={form.documentUrl} target="_blank" rel="noopener noreferrer">מסמך התכנים המלא ↗</a>}
+      {form.documentUrl && form.documentLinkVisible && <a href={form.documentUrl} target="_blank" rel="noopener noreferrer">מסמך התכנים המלא ↗</a>}
       {form.instructions && <p className="formatted-text">{form.instructions}</p>}
     </header>
     <fieldset className="workspace-boundary" disabled={disabled}><div className="choice-clusters">{clusters.map(cluster => {

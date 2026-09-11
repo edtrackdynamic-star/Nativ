@@ -307,3 +307,13 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .capacity-planner { border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-block: 12px; min-width: 0; }
 .capacity-planner summary { cursor: pointer; font-weight: 800; }
 .capacity-planner > label { display: grid; gap: 8px; max-width: 320px; }
+.document-import { border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-block: 14px; background: #fff; }
+.document-import summary { cursor: pointer; font-weight: 800; }
+.document-import code { direction: ltr; unicode-bidi: isolate; overflow-wrap: anywhere; }
+.description-review { overflow-x: auto; margin-block: 14px; }
+.description-review table { width: 100%; min-width: 760px; border-collapse: collapse; }
+.description-review th, .description-review td { padding: 10px; border: 1px solid var(--line); text-align: start; vertical-align: top; }
+.description-review td:first-child { min-width: 170px; }
+.description-review td:first-child > * { display: block; margin-block: 4px; }
+.description-review select, .description-review textarea { width: 100%; box-sizing: border-box; }
+.description-review textarea { resize: vertical; min-width: 280px; }

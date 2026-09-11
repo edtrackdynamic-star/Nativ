@@ -76,7 +76,21 @@ export class NativCommandService {
       const cycle = await requireCycle(transaction, actor.organizationId, cycleId)
       const catalog = await transaction.getCatalogSnapshot(actor.organizationId, cycleId)
       if (!catalog) throw new EntityNotFoundError('צילום קטלוג', cycleId)
-      return { cycle, catalog: actor.roles.includes('student') && cycle.status === 'choice_open' ? { ...catalog, clusters: catalog.clusters.filter(cluster => includesClass(cluster, actor.studentClassId)) } : catalog }
+      if (!actor.roles.includes('student')) return { cycle, catalog }
+      const formDesign = catalog.formDesign
+        ? {
+            ...catalog.formDesign,
+            documentUrl: catalog.formDesign.documentLinkVisible ? catalog.formDesign.documentUrl : '',
+          }
+        : undefined
+      return {
+        cycle,
+        catalog: {
+          ...catalog,
+          formDesign,
+          clusters: catalog.clusters.filter(cluster => includesClass(cluster, actor.studentClassId)),
+        },
+      }
     })
   }
 

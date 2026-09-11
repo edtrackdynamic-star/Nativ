@@ -23,6 +23,7 @@ export { rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAssignm
 export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
 export { deliverNativMail } from './mailDelivery'
 export { getStudentRoster } from './studentRoster'
+export { extractCourseDescriptions } from './courseDescriptionImport'
 
 function mapError(error: unknown): never {
   if (error instanceof HttpsError) throw error

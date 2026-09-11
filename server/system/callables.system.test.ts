@@ -91,6 +91,8 @@ describe('Nativ callable system flow', () => {
       reason: 'אסור לתלמיד',
       idempotencyKey: 'student-transition-blocked',
     })).rejects.toMatchObject({ code: 'functions/permission-denied' })
+    const extractDescriptions = httpsCallable<Record<string, unknown>, unknown>(functions, 'extractCourseDescriptions')
+    await expect(extractDescriptions({ kind:'docx',fileName:'courses.docx',base64:'AA==',candidates:[{id:'0-0',label:'קורס',instructorNames:[]}] })).rejects.toMatchObject({ code:'functions/permission-denied' })
 
     await signOut(auth)
     const coordinator = accounts.find((account) => account.label === 'רכז שיבוץ')
@@ -329,7 +331,7 @@ describe('Nativ callable system flow', () => {
     const course={label:'קורס',instructorIds:[teachers[0].uid],minimum:0,target:10,maximum:20,repeatPolicy:'allowed'}
     const clusters=[{label:'ז1 בלבד',eligibleClassIds:['class-demo-7a'],requiredRankingCount:1,courses:[course]},{label:'ז2 בלבד',eligibleClassIds:['class-demo-7b'],requiredRankingCount:1,courses:[course]},{label:'כולם',requiredRankingCount:1,courses:[course]}]
     for(const invalid of [[],['another-school-class']]) await expect(call('saveCycleCatalog',{cycleId:cycle.id,clusters:[{...clusters[0],eligibleClassIds:invalid}]})).rejects.toMatchObject({code:'functions/invalid-argument'})
-    const catalog=await call<ChoiceContext['catalog']>('saveCycleCatalog',{cycleId:cycle.id,expectedVersion:cycle.version,clusters})
+    const catalog=await call<ChoiceContext['catalog']>('saveCycleCatalog',{cycleId:cycle.id,expectedVersion:cycle.version,formDesign:{title:'בדיקת כיתות',theme:'teal',layout:'cards',documentUrl:'https://docs.google.com/document/d/private-source/edit',documentLinkVisible:false},clusters})
     cycle=await call<AssignmentCycle>('getCycle',{cycleId:cycle.id})
     cycle=await call<AssignmentCycle>('transitionCycle',{cycleId:cycle.id,expectedVersion:cycle.version,to:'choice_open',reason:'test',idempotencyKey:'class-open'})
     await expect(call('saveCycleCatalog',{cycleId:cycle.id,clusters})).rejects.toMatchObject({code:'functions/failed-precondition'})
@@ -337,6 +339,8 @@ describe('Nativ callable system flow', () => {
     await expect(call('listEligibleClasses')).rejects.toMatchObject({code:'functions/permission-denied'})
     const context=await call<ChoiceContext>('getChoiceContext',{cycleId:cycle.id})
     expect(context.catalog.clusters.map(c=>c.label)).toEqual(['ז1 בלבד','כולם'])
+    expect(context.catalog.formDesign?.documentUrl).toBe('')
+    expect(context.catalog.formDesign?.documentLinkVisible).toBe(false)
     const preferences=context.catalog.clusters.map(c=>({clusterId:c.clusterId,rankings:[{courseId:c.courses[0].courseId,rank:1}]}))
     await expect(call('savePreferenceDraft',{cycleId:cycle.id,expectedVersion:0,idempotencyKey:'forged-class',preferences:[...preferences,{clusterId:catalog.clusters[1].clusterId,rankings:[]}],classId:'class-demo-7b'})).rejects.toMatchObject({code:'functions/failed-precondition'})
     const draft=await call<PreferenceSubmission>('savePreferenceDraft',{cycleId:cycle.id,expectedVersion:0,idempotencyKey:'class-draft',preferences})
@@ -344,7 +348,9 @@ describe('Nativ callable system flow', () => {
     try {
       await getAdminAuth(adminApp).setCustomUserClaims(user.uid,{...user.customClaims,classId:'class-demo-7b'})
       await auth.currentUser!.getIdToken(true)
-      expect((await call<ChoiceContext>('getChoiceContext',{cycleId:cycle.id})).catalog.clusters.map(c=>c.label)).toEqual(['ז2 בלבד','כולם'])
+      const movedContext=await call<ChoiceContext>('getChoiceContext',{cycleId:cycle.id})
+      expect(movedContext.catalog.clusters.map(c=>c.label)).toEqual(['ז2 בלבד','כולם'])
+      expect(movedContext.catalog.formDesign?.documentUrl).toBe('')
       await expect(call('submitPreferences',{cycleId:cycle.id,expectedDraftVersion:draft.version,submissionVersion:1,idempotencyKey:'class-moved-submit'})).rejects.toMatchObject({code:'functions/failed-precondition'})
     } finally {
       await getAdminAuth(adminApp).setCustomUserClaims(user.uid,user.customClaims!)

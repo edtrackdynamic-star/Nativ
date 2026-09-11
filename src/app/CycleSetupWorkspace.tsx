@@ -1,4 +1,5 @@
 import { CapacityPlanner } from './CapacityPlanner'
+import { CourseDescriptionImport } from './CourseDescriptionImport'
 import type { StudentRosterEntry } from '../domain/studentRoster'
 import { CourseTableImport } from './CourseTableImport'
 import { InstructorPicker } from './InstructorPicker'
@@ -43,7 +44,7 @@ export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cy
   useEffect(()=>{ if(!cycleId)return;let active=true;void Promise.all([listEligibleInstructors(),getCycleCatalog(cycleId),listEligibleClasses()]).then(([teachers,data,schoolClasses])=>{
     if(!active)return;setInstructors(teachers);setClasses(schoolClasses)
     const next=data.catalog?.clusters.length ? data.catalog.clusters.map(cluster=>({...(cluster.eligibleClassIds===undefined?{}:{eligibleClassIds:cluster.eligibleClassIds}),...(cluster.capacityFlexibility===undefined?{}:{capacityFlexibility:cluster.capacityFlexibility}),label:cluster.label,description:cluster.description??'',rationaleMode:cluster.rationaleMode??'optional',requiredRankingCount:cluster.requiredRankingCount,balanceByClass:cluster.balanceByClass===true,courses:data.courses.filter(course=>course.clusterId===cluster.clusterId).map(course=>({...(course.capacity.limit===undefined?{}:{capacityLimit:course.capacity.limit}),label:course.label,description:course.description,documentUrl:course.documentUrl??'',imageUrl:course.imageUrl??'',subjectArea:course.subjectArea,instructorIds:course.instructorIds,minimum:course.capacity.minimum,target:course.capacity.target,maximum:course.capacity.maximum,repeatPolicy:course.repeatPolicy}))})) : [emptyCluster()]
-    const form={...defaultFormDesign,...data.catalog?.formDesign};setClusters(next);setDesign(form);setSavedSignature(JSON.stringify({clusters:next,design:form}));setLoaded(true)
+    const form={...defaultFormDesign,...data.catalog?.formDesign,documentLinkVisible:data.catalog?.formDesign?.documentLinkVisible??Boolean(data.catalog?.formDesign?.documentUrl)};setClusters(next);setDesign(form);setSavedSignature(JSON.stringify({clusters:next,design:form}));setLoaded(true)
   }).catch(()=>{if(active)setMessage('לא ניתן לטעון את הגדרות התהליך. נסו לפתוח אותו מחדש.')});return()=>{active=false}
   },[cycleId])
   useEffect(()=>{if(!cycleId)return;let active=true;void getStudentRoster(cycleId).then(values=>{if(active)setRoster({cycleId,students:values})}).catch(()=>{if(active)setRoster(null)});return()=>{active=false}},[cycleId])
@@ -75,12 +76,23 @@ export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cy
       <label>טקסט כפתור ההגשה<input maxLength={60} value={design.submitLabel} onChange={e=>setDesign({...design,submitLabel:e.target.value})}/></label>
       <label>פתיח<textarea rows={4} maxLength={4000} value={design.introduction} onChange={e=>setDesign({...design,introduction:e.target.value})}/></label>
       <label>הוראות לבחירה<textarea rows={4} maxLength={2000} value={design.instructions} onChange={e=>setDesign({...design,instructions:e.target.value})}/></label>
-      <label>מסמך Google Docs עם תכני התהליך<input type="url" value={design.documentUrl} onChange={e=>setDesign({...design,documentUrl:e.target.value})}/></label>
+      <label>מסמך התכנים המלא (רשות)<input type="url" value={design.documentUrl} onChange={e=>setDesign({...design,documentUrl:e.target.value})}/></label>
+      <label className="setup-option"><input type="checkbox" checked={design.documentLinkVisible} onChange={e=>setDesign({...design,documentLinkVisible:e.target.checked})}/>הצגת הקישור לתלמידים בראש הטופס</label>
       <label>קישור לתמונת פתיחה<input type="url" value={design.coverUrl} onChange={e=>setDesign({...design,coverUrl:e.target.value})}/></label>
       <label>צבע מוביל<select value={design.theme} onChange={e=>setDesign({...design,theme:e.target.value as FormDesign['theme']})}><option value="blue">כחול</option><option value="teal">טורקיז</option><option value="purple">סגול</option></select></label>
       <label>תצוגת הקורסים<select value={design.layout} onChange={e=>setDesign({...design,layout:e.target.value as FormDesign['layout']})}><option value="cards">כרטיסים</option><option value="list">רשימה</option></select></label>
     </div>}
-    <div hidden={tab!=='courses'}>{clusters.map((cluster,ci)=><article className="setup-cluster" key={ci}>
+    <div hidden={tab!=='courses'}><CourseDescriptionImport
+      documentUrl={design.documentUrl}
+      onDocumentUrl={documentUrl=>setDesign({...design,documentUrl})}
+      candidates={clusters.flatMap((cluster,ci)=>cluster.courses.map((course,ti)=>({
+        id:`${ci}-${ti}`, clusterLabel:cluster.label||`מקבץ ${ci+1}`, label:course.label,
+        instructorNames:course.instructorIds.map(id=>instructors.find(teacher=>teacher.uid===id)?.displayName??'').filter(Boolean), description:course.description,
+      })))}
+      onApply={values=>setClusters(current=>current.map((cluster,ci)=>({...cluster,courses:cluster.courses.map((course,ti)=>({
+        ...course, description:values.find(value=>value.courseId===`${ci}-${ti}`)?.description??course.description,
+      }))})))}
+    />{clusters.map((cluster,ci)=><article className="setup-cluster" key={ci}>
       <div className="workspace-heading"><h3>מקבץ {ci+1}: {cluster.label}</h3><div className="workspace-actions"><button type="button" disabled={ci===0} onClick={()=>setClusters(move(clusters,ci,-1))}>הזזה למעלה</button><button type="button" disabled={ci===clusters.length-1} onClick={()=>setClusters(move(clusters,ci,1))}>הזזה למטה</button></div></div>
       <div className="setup-grid"><label>שם המקבץ<input value={cluster.label} onChange={e=>updateCluster(ci,{label:e.target.value})}/></label><label>מספר קורסים לדירוג<input type="number" min={1} max={cluster.courses.length} value={cluster.requiredRankingCount} onChange={e=>updateCluster(ci,{requiredRankingCount:e.target.value})}/></label><label>הסבר לבחירה<select value={cluster.rationaleMode??'optional'} onChange={e=>updateCluster(ci,{rationaleMode:e.target.value as CatalogClusterDraft['rationaleMode']})}><option value="optional">שדה רשות</option><option value="required">שדה חובה</option><option value="hidden">ללא שדה הסבר</option></select></label><label>הוראות למקבץ<textarea value={cluster.description??''} onChange={e=>updateCluster(ci,{description:e.target.value})}/></label></div>
       <fieldset className="teacher-picker"><legend>כיתות משתתפות</legend>

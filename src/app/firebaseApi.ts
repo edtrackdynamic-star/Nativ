@@ -69,6 +69,11 @@ export interface CycleCatalogData { catalog: import('../domain/catalog').CycleCa
 export async function getCycleCatalog(cycleId: string): Promise<CycleCatalogData> {
   return (await httpsCallable<{cycleId: string}, CycleCatalogData>(functionsClient(), 'getCycleCatalog')({cycleId})).data
 }
+export interface ExtractedDescriptionResult { sourceCourseName: string; sourceTeacherName: string; description: string; proposedCourseId: string; match: 'clear' | 'review' }
+export type DescriptionSource = { kind: 'google_docs'; url: string } | { kind: 'docx'; fileName: string; base64: string }
+export async function extractCourseDescriptions(source: DescriptionSource, candidates: Array<{id:string;label:string;instructorNames:string[]}>): Promise<{results:ExtractedDescriptionResult[];readerEmail:string}> {
+  return (await httpsCallable<Record<string, unknown>, {results:ExtractedDescriptionResult[];readerEmail:string}>(functionsClient(), 'extractCourseDescriptions', {timeout:180000})({...source,candidates})).data
+}
 
 export interface InstructorWorkspaceData { cycle: { schoolYear: string; termLabel: string; status: CycleStatus }; courses: Array<{ id: string; label: string; description: string; subjectArea: string; students: string[] }> }
 export async function getInstructorWorkspace(cycleId: string): Promise<InstructorWorkspaceData> {
