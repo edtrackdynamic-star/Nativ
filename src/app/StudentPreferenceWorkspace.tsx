@@ -10,9 +10,9 @@ import { formatIsraelDateTime } from './israelDateTime'
 import type { WorkflowState } from '../domain/workflow'
 import { downloadCycleDocument, getChoiceContext, getCycle, getWorkflow, listMySubmissions, savePreferenceDraft, submitAppeal, submitPreferenceDraft } from './firebaseApi'
 
-interface StudentPreferenceWorkspaceProps { cycleId: string; readOnly?: boolean }
+interface StudentPreferenceWorkspaceProps { cycleId: string; readOnly?: boolean; schoolName?: string; schoolLogo?: string }
 
-export function StudentPreferenceWorkspace({ cycleId, readOnly = false }: StudentPreferenceWorkspaceProps) {
+export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolName, schoolLogo }: StudentPreferenceWorkspaceProps) {
   const [context, setContext] = useState<ChoiceContext | null>(null)
   const [cycle, setCycle] = useState<AssignmentCycle | null>(null)
   const [workflow, setWorkflow] = useState<WorkflowState | null>(null)
@@ -155,7 +155,7 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false }: Studen
       {cycle.choiceDeadlineEnabled && cycle.choiceClosesAt && <p className={`choice-deadline ${deadlinePassed ? 'expired' : ''}`} role="status">{deadlinePassed ? 'מועד ההגשה הסתיים' : 'ניתן להגיש עד'}: {formatIsraelDateTime(cycle.choiceClosesAt)}{deadlinePassed && '. הבחירות שהוגשו נשמרו. אם המועד יוארך, תוכלו להמשיך לאחר רענון.'}</p>}
       {failedSignature === signature && <button className="secondary-action" onClick={() => setFailedSignature('')}>ניסיון שמירה נוסף</button>}
       <p>{preferences.reduce((sum, entry) => sum + entry.rankings.filter((ranking) => ranking.courseId).length, 0)} מתוך {context.catalog.clusters.reduce((sum, entry) => sum + entry.requiredRankingCount, 0)} בחירות הושלמו</p>
-      <ChoiceForm clusters={context.catalog.clusters} design={context.catalog.formDesign} preferences={preferences} onChange={setPreferences} onOpenDocument={()=>void downloadCycleDocument(cycle.id).catch(()=>setMessage('פתיחת המסמך נכשלה. בקשו מהרכז לבדוק את הקובץ.'))} onSubmit={()=>void submit()} disabled={readOnly || saving || deadlinePassed} submitDisabled={!complete || saving || isSubmitted || readOnly || deadlinePassed} />
+      <ChoiceForm clusters={context.catalog.clusters} design={context.catalog.formDesign} preferences={preferences} onChange={setPreferences} onOpenDocument={()=>void downloadCycleDocument(cycle.id).catch(()=>setMessage('פתיחת המסמך נכשלה. בקשו מהרכז לבדוק את הקובץ.'))} schoolName={schoolName} schoolLogo={schoolLogo} onSubmit={()=>void submit()} disabled={readOnly || saving || deadlinePassed} submitDisabled={!complete || saving || isSubmitted || readOnly || deadlinePassed} />
       <div className="workspace-actions">
         <span>{isSubmitted ? 'הבחירות המוצגות הוגשו ונשמרו' : submissionCount ? 'יש להגיש מחדש כדי לעדכן את הבחירות שהוגשו' : 'הבחירות טרם הוגשו'}</span>
       </div>

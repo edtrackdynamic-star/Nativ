@@ -1,9 +1,10 @@
 import type { ClusterPreference, ClusterSnapshot } from '../domain/preferences'
 import { defaultFormDesign, type FormDesign } from '../domain/formDesign'
+import { SchoolBrand } from '../components/SchoolBrand'
 
-export function ChoiceForm({ clusters, design = defaultFormDesign, preferences, onChange, onSubmit, onOpenDocument, disabled = false, submitDisabled = false, preview = false }: {
+export function ChoiceForm({ clusters, design = defaultFormDesign, preferences, onChange, onSubmit, onOpenDocument, schoolName, schoolLogo, disabled = false, submitDisabled = false, preview = false }: {
   clusters: ClusterSnapshot[]; design?: FormDesign; preferences: ClusterPreference[];
-  onChange: (value: ClusterPreference[]) => void; onSubmit: () => void; onOpenDocument?: () => void; disabled?: boolean; submitDisabled?: boolean; preview?: boolean;
+  onChange: (value: ClusterPreference[]) => void; onSubmit: () => void; onOpenDocument?: () => void; schoolName?: string; schoolLogo?: string; disabled?: boolean; submitDisabled?: boolean; preview?: boolean;
 }) {
   const form = { ...defaultFormDesign, ...design }
   const documentAvailable = form.documentLinkVisible && Boolean(form.documentUrl || (form.documentStoragePath && onOpenDocument))
@@ -18,6 +19,7 @@ export function ChoiceForm({ clusters, design = defaultFormDesign, preferences, 
   function update(id: string, patch: Partial<ClusterPreference>) { onChange(preferences.map(p => p.clusterId === id ? { ...p, ...patch } : p)) }
   return <form className={`choice-form theme-${form.theme} layout-${form.layout}`} onSubmit={event => { event.preventDefault(); onSubmit() }}>
     <header className="choice-form-header">
+      {schoolName && <SchoolBrand className="choice-form-school-brand" imageClassName="choice-form-school-logo" name={schoolName} src={schoolLogo} />}
       {form.coverUrl && <img className="form-cover" src={form.coverUrl} alt="" />}
       <h2>{form.title}</h2>{introduction && <p className="formatted-text">{documentAvailable && introLinkIndex >= 0 ? <>{introduction.slice(0,introLinkIndex)}{documentLink}{introduction.slice(introLinkIndex+introLinkLabel.length)}</> : introduction}</p>}
       {documentAvailable && introLinkIndex < 0 && documentLink}
