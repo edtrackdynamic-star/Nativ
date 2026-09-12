@@ -15,6 +15,8 @@ import { assignmentRunDocumentPath, assignmentRunsCollectionPath, catalogSnapsho
 import { callableOptions, coreFirestore, nativFirestore as firestore } from './firebase'
 import { actorFromRequest, inputRecord, requiredInteger, requiredString } from './request'
 import type { MailJob } from '../../server/mail/delivery'
+import type { AssignmentChangeRecord } from '../../src/domain/assignmentChange'
+import { operationalError } from './operationalIncidents'
 
 function requireCapability(actor: ActorContext, capability: CapabilityId) {
   if (!actor.capabilities.includes(capability)) throw new HttpsError('permission-denied', 'אין הרשאה לפעולה זו')
@@ -530,6 +532,7 @@ export const approveCapacityOverride = onCall(callableOptions, async (request) =
 })
 
 export const executeAppealChange = onCall(callableOptions, async (request) => {
+  try {
   const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.assignment.manage')
   const data = inputRecord(request.data)
@@ -565,6 +568,8 @@ export const executeAppealChange = onCall(callableOptions, async (request) => {
     const afterCourse = courses.find((entry) => entry.id === appeal.requestedCourseId)
     if (!cluster || !beforeCourse || !afterCourse) throw new HttpsError('failed-precondition', 'חסרים פרטי קורס; יש להשלים את הקטלוג לפני ביצוע השינוי')
     const eventId = `${cycleId}-appeal-change-${appealId}`
+    const changeId = `appeal-${appealId}`
+    const change: AssignmentChangeRecord = { id: changeId, cycleId, studentId: appeal.studentId, studentName: previous.studentLabel ?? profile?.displayLabel ?? 'תלמיד/ה', classLabel: previous.studentClassLabel ?? profile?.classLabel ?? '', clusterId: appeal.clusterId, clusterLabel: cluster.label, beforeCourseId: beforeCourse.id, beforeCourseLabel: beforeCourse.label, afterCourseId: afterCourse.id, afterCourseLabel: afterCourse.label, occurredAt: now, source: 'appeal', secretaryAutoEventId: eventId }
     const mailJob: MailJob = { notificationId: eventId, audience: 'secretary', studentId: appeal.studentId, recipientIds: secretaryIds, clusterLabel: cluster.label, beforeCourseLabel: beforeCourse.label, afterCourseLabel: afterCourse.label, occurredAt: now }
     const notifications: NotificationRecord[] = [
       {id:randomUUID(),audience:'secretary',recipientRef:'school-secretary',channel:'in_app',subject:'שינוי שיבוץ לאחר ערעור',body:beforeCourse.label+' ← '+afterCourse.label,status:'available',createdAt:now},
@@ -573,9 +578,70 @@ export const executeAppealChange = onCall(callableOptions, async (request) => {
     ]
     const next: WorkflowState = { ...workflow, assignmentRun: { ...workflow.assignmentRun, assignments, enrollmentByCourse: counts }, appeals: workflow.appeals.map((entry) => entry.id === appealId ? { ...entry, analysis: fresh, status: 'executed', executedAt: now, executedBy: actor.uid } : entry), notifications: [...workflow.notifications, ...notifications], version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'appeal.change.executed', `השיבוץ שונה מ-${previous.courseId} ל-${appeal.requestedCourseId} לאחר בדיקה חוזרת`, now) }
     transaction.set(reference, next)
+    transaction.create(firestore.doc(`organizations/${actor.organizationId}/assignmentChanges/${cycleId}/entries/${changeId}`), change)
     transaction.create(firestore.doc(`organizations/${actor.organizationId}/mailEvents/${eventId}`), { organizationId: actor.organizationId, cycleId, jobs: [mailJob], status: secretaryIds.length ? 'queued' : 'failed', errorCode: secretaryIds.length ? null : 'no_active_secretary', attempts: 0, createdAt: now, createdBy: actor.uid })
     return next
   })
+  } catch (error) { return operationalError(String(request.auth?.token.organizationId ?? ''), 'execute_appeal_change', error) }
+})
+
+export const changeStudentAssignment = onCall(callableOptions, async (request) => {
+  try {
+  const actor = await actorFromRequest(request, 'write')
+  requireCapability(actor, 'nativ.assignment.manage')
+  const data = inputRecord(request.data)
+  const cycleId = requiredString(data, 'cycleId')
+  const studentId = requiredString(data, 'studentId')
+  const clusterId = requiredString(data, 'clusterId')
+  const requestedCourseId = requiredString(data, 'requestedCourseId')
+  const reason = requiredString(data, 'reason').slice(0, 500)
+  const expectedWorkflowVersion = requiredInteger(data, 'expectedWorkflowVersion')
+  const [cycleSnapshot, coursesSnapshot, catalogSnapshot] = await Promise.all([
+    firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)).get(),
+    firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId)).get(),
+    firestore.doc(catalogSnapshotDocumentPath(actor.organizationId, cycleId)).get(),
+  ])
+  if (!['published', 'appeals'].includes(String(cycleSnapshot.data()?.status))) throw new HttpsError('failed-precondition', 'שינוי ידני אפשרי רק לאחר פרסום השיבוץ ולפני סיום המחזור')
+  const courses = (coursesSnapshot.data()?.courses ?? []) as Course[]
+  const cluster = (catalogSnapshot.data() as CycleCatalogSnapshot | undefined)?.clusters.find((entry) => entry.clusterId === clusterId)
+  const afterCourse = courses.find((entry) => entry.id === requestedCourseId && entry.clusterId === clusterId && entry.published)
+  if (!cluster || !afterCourse) throw new HttpsError('failed-precondition', 'הקורס המבוקש אינו זמין במקבץ שנבחר')
+  const profile = (await studentAssignmentProfiles(actor.organizationId, [studentId])).get(studentId)
+  if (!includesClass(cluster, profile?.classId)) throw new HttpsError('failed-precondition', 'כיתת התלמיד אינה משתתפת במקבץ זה')
+  const secretaryIds = (await firestore.collection(`organizations/${actor.organizationId}/accessAssignments`).where('roles', 'array-contains', 'secretary').get()).docs.filter((entry) => entry.data().active === true).map((entry) => entry.id)
+  const now = new Date().toISOString()
+  const changeId = `manual-${randomUUID()}`
+  return firestore.runTransaction(async (transaction) => {
+    const reference = workflowRef(actor, cycleId)
+    const snapshot = await transaction.get(reference)
+    const workflow = snapshot.data() as WorkflowState | undefined
+    if (!workflow?.assignmentRun?.publishedAt || workflow.version !== expectedWorkflowVersion) throw new HttpsError('aborted', 'השיבוץ השתנה מאז הטעינה. רעננו ובדקו מחדש לפני ביצוע שינוי')
+    const previous = workflow.assignmentRun.assignments.find((entry) => entry.studentId === studentId && entry.clusterId === clusterId)
+    if (!previous) throw new HttpsError('failed-precondition', 'לתלמיד אין שיבוץ במקבץ שנבחר')
+    if (previous.courseId === requestedCourseId) throw new HttpsError('failed-precondition', 'התלמיד כבר משובץ לקורס הזה')
+    if (workflow.appeals.some((entry) => entry.studentId === studentId && entry.clusterId === clusterId && !['executed', 'rejected'].includes(entry.status))) throw new HttpsError('failed-precondition', 'לתלמיד יש ערעור פתוח במקבץ זה. השלימו את הטיפול בו לפני שינוי ידני')
+    const beforeCourse = courses.find((entry) => entry.id === previous.courseId)
+    if (!beforeCourse) throw new HttpsError('failed-precondition', 'הקורס הנוכחי אינו קיים בקטלוג')
+    const afterCount = (workflow.assignmentRun.enrollmentByCourse[afterCourse.id] ?? 0) + 1
+    if (afterCount > afterCourse.capacity.maximum) throw new HttpsError('failed-precondition', `בקורס ${afterCourse.label} אין מקום פנוי. בדקו את המכסה או בחרו קורס אחר`)
+    const duplicate = workflow.assignmentRun.assignments.some((entry) => entry.studentId === studentId && entry.clusterId !== clusterId && courses.find((course) => course.id === entry.courseId)?.logicalCourseId === afterCourse.logicalCourseId)
+    if (duplicate && afterCourse.repeatPolicy === 'prohibited') throw new HttpsError('failed-precondition', 'מדיניות הקורס אינה מאפשרת לתלמיד להשתתף בו שוב')
+    const assignments = workflow.assignmentRun.assignments.map((entry) => entry === previous ? { ...entry, courseId: afterCourse.id, source: 'hard_constraint' as const, explanation: 'שינוי ידני בידי רכז' } : entry)
+    const counts = { ...workflow.assignmentRun.enrollmentByCourse, [beforeCourse.id]: workflow.assignmentRun.enrollmentByCourse[beforeCourse.id] - 1, [afterCourse.id]: afterCount }
+    const eventId = `${cycleId}-${changeId}`
+    const change: AssignmentChangeRecord = { id: changeId, cycleId, studentId, studentName: previous.studentLabel ?? profile?.displayLabel ?? 'תלמיד/ה', classLabel: previous.studentClassLabel ?? profile?.classLabel ?? '', clusterId, clusterLabel: cluster.label, beforeCourseId: beforeCourse.id, beforeCourseLabel: beforeCourse.label, afterCourseId: afterCourse.id, afterCourseLabel: afterCourse.label, occurredAt: now, source: 'manual', secretaryAutoEventId: eventId }
+    const mailJob: MailJob = { notificationId: eventId, audience: 'secretary', studentId, recipientIds: secretaryIds, clusterLabel: cluster.label, beforeCourseLabel: beforeCourse.label, afterCourseLabel: afterCourse.label, occurredAt: now }
+    const notifications: NotificationRecord[] = [
+      { id: randomUUID(), audience: 'student', recipientRef: studentId, channel: 'in_app', subject: 'השיבוץ שלך עודכן', body: `השיבוץ במקבץ ${cluster.label} עודכן ל${afterCourse.label}`, status: 'available', createdAt: now },
+      { id: eventId, audience: 'secretary', recipientRef: 'school-secretary', channel: 'email', subject: 'שינוי שיבוץ', body: `${beforeCourse.label} ← ${afterCourse.label}`, status: 'queued', deliveryEventId: eventId, createdAt: now },
+    ]
+    const next: WorkflowState = { ...workflow, assignmentRun: { ...workflow.assignmentRun, assignments, enrollmentByCourse: counts }, notifications: [...workflow.notifications, ...notifications], version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'assignment.manual_change.executed', reason, now) }
+    transaction.set(reference, next)
+    transaction.create(firestore.doc(`organizations/${actor.organizationId}/assignmentChanges/${cycleId}/entries/${changeId}`), change)
+    transaction.create(firestore.doc(`organizations/${actor.organizationId}/mailEvents/${eventId}`), { organizationId: actor.organizationId, cycleId, jobs: [mailJob], status: secretaryIds.length ? 'queued' : 'failed', errorCode: secretaryIds.length ? null : 'no_active_secretary', attempts: 0, createdAt: now, createdBy: actor.uid })
+    return { workflow: next, changeId }
+  })
+  } catch (error) { return operationalError(String(request.auth?.token.organizationId ?? ''), 'change_student_assignment', error) }
 })
 
 export const rejectAssignmentRun=onCall(callableOptions,async request=>{

@@ -7,6 +7,7 @@ import { canonicalEmail, deliverOnce, recipientAllowed, renderMail, type MailJob
 import { FirestoreDeliveryStore } from '../../server/mail/FirestoreDeliveryStore'
 import { coreFirestore, nativFirestore } from './firebase'
 import { subscriptionAccess } from './request'
+import { reportOperationalFailure } from './operationalIncidents'
 
 const smtpSecret = defineSecret('EDTRACK_SMTP_CONFIG')
 const key = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -31,6 +32,18 @@ async function organizationIsActive(organizationId: string): Promise<boolean> {
 
 async function recipient(organizationId: string, uid: string, audience: MailJob['audience']): Promise<string | null> {
   if (!segment(uid)) return null
+  if (audience === 'incident') {
+    const [platform, member, access] = await Promise.all([
+      coreFirestore.doc(`platformAdmins/${uid}`).get(),
+      coreFirestore.doc(`organizations/${organizationId}/members/${uid}`).get(),
+      nativFirestore.doc(`organizations/${organizationId}/accessAssignments/${uid}`).get(),
+    ])
+    const platformData = platform.data(), memberData = member.data()
+    if (platformData?.active === true) return canonicalEmail(platformData.email)
+    if (memberData?.active !== true || memberData.isDemo === true) return null
+    if (memberData.role === 'school_admin' || (access.data()?.active === true && access.data()?.roles?.includes('access_manager'))) return canonicalEmail(memberData.primaryEmail) ?? canonicalEmail(memberData.email)
+    return null
+  }
   const [member, access] = await Promise.all([
     coreFirestore.doc(`organizations/${organizationId}/members/${uid}`).get(),
     nativFirestore.doc(`organizations/${organizationId}/accessAssignments/${uid}`).get(),
@@ -46,7 +59,7 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
   const { organizationId } = event.params
   const reference = event.data.ref
   const jobs = event.data.data().jobs as MailJob[]
-  if (!segment(organizationId) || !Array.isArray(jobs) || jobs.some((job) => !job || typeof job.notificationId !== 'string' || typeof job.studentId !== 'string' || !segment(job.notificationId) || !segment(job.studentId) || !['student', 'secretary','staff'].includes(job.audience) || (job.audience==='staff' && (!job.recipientId || !segment(job.recipientId))) || (job.recipientIds && (!Array.isArray(job.recipientIds) || job.recipientIds.some(uid=>typeof uid!=='string'||!segment(uid)))))) {
+  if (!segment(organizationId) || !Array.isArray(jobs) || jobs.some((job) => !job || typeof job.notificationId !== 'string' || typeof job.studentId !== 'string' || !segment(job.notificationId) || !segment(job.studentId) || !['student', 'secretary','staff','instructor_change','incident'].includes(job.audience) || (['staff','instructor_change'].includes(job.audience) && (!job.recipientId || !segment(job.recipientId))) || (job.audience==='instructor_change' && (!Array.isArray(job.relatedCourseIds) || !job.relatedCourseIds.length || job.relatedCourseIds.some(id=>typeof id!=='string'||!segment(id)))) || (job.audience==='incident' && (!job.incident || !segment(job.incident.id) || !job.recipientIds)) || (job.recipientIds && (!Array.isArray(job.recipientIds) || job.recipientIds.some(uid=>typeof uid!=='string'||!segment(uid)))))) {
     await reference.update({ status: 'failed', errorCode: 'mail_event_invalid' }); return
   }
   const attempt = await nativFirestore.runTransaction(async (transaction) => {
@@ -56,14 +69,20 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
     transaction.update(reference, { attempts: count, status: count > 5 ? 'failed' : 'processing', updatedAt: FieldValue.serverTimestamp() })
     return count > 5 ? 0 : count
   })
-  if (!attempt) return
-  if (!await organizationIsActive(organizationId)) {
+  if (!attempt) {
+    if (event.data.data().kind !== 'incident') await reportOperationalFailure(organizationId, 'mail_delivery', 'retry_limit').catch(() => undefined)
+    else if (jobs[0]?.incident?.id) await nativFirestore.doc(`organizations/${organizationId}/operationalIncidents/${jobs[0].incident.id}`).update({ status: 'failed' }).catch(() => undefined)
+    return
+  }
+  if (event.data.data().kind !== 'incident' && !await organizationIsActive(organizationId)) {
     await reference.update({ status: 'failed', errorCode: 'organization_or_subscription_inactive' }); return
   }
-  const { transport, from } = smtpTransport()
+  let transport: ReturnType<typeof smtpTransport>['transport'], from: string
+  try { ({ transport, from } = smtpTransport()) }
+  catch { if (event.data.data().kind !== 'incident') await reportOperationalFailure(organizationId, 'mail_delivery', 'mail_configuration').catch(() => undefined); throw new Error('mail_configuration_invalid') }
   // Authentication probe only; it sends no email. Safe to retry before claims.
   try { await transport.verify() }
-  catch { throw new Error('smtp_connection_failed') }
+  catch { if (event.data.data().kind !== 'incident') await reportOperationalFailure(organizationId, 'mail_delivery', 'smtp_connection').catch(() => undefined); throw new Error('smtp_connection_failed') }
   const store = new FirestoreDeliveryStore(nativFirestore, `${reference.path}/receipts`)
   const jobStatuses: string[] = []
   for (const job of jobs) {
@@ -71,7 +90,7 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
     // Freeze recipients once: replayed events must not acquire new recipients.
     let roster = (await statusReference.get()).data()?.recipientIds as string[] | undefined
     if (!roster) {
-      const candidates = job.recipientIds ?? (job.audience === 'staff' ? [job.recipientId!] : job.audience === 'student' ? [job.studentId] : (await nativFirestore.collection(`organizations/${organizationId}/accessAssignments`).where('roles', 'array-contains', 'secretary').get()).docs.filter((doc) => doc.data().active === true).map((doc) => doc.id))
+      const candidates = job.recipientIds ?? (['staff','instructor_change'].includes(job.audience) ? [job.recipientId!] : job.audience === 'student' ? [job.studentId] : (await nativFirestore.collection(`organizations/${organizationId}/accessAssignments`).where('roles', 'array-contains', 'secretary').get()).docs.filter((doc) => doc.data().active === true).map((doc) => doc.id))
       roster = await nativFirestore.runTransaction(async (transaction) => {
         const existing = await transaction.get(statusReference)
         if (existing.exists) return existing.data()!.recipientIds as string[]
@@ -80,7 +99,7 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
       })
     }
     let student = { name: '', classLabel: '' }
-    if (job.audience !== 'student' && !job.results?.length) {
+    if (!['student', 'incident'].includes(job.audience) && !job.results?.length) {
       const [member, profile] = await Promise.all([coreFirestore.doc(`organizations/${organizationId}/members/${job.studentId}`).get(), coreFirestore.doc(`organizations/${organizationId}/students/${job.studentId}`).get()])
       const classId = String(profile.data()?.classId ?? member.data()?.classIds?.[0] ?? '')
       const classRecord = segment(classId) ? await coreFirestore.doc(`organizations/${organizationId}/classes/${classId}`).get() : null
@@ -90,6 +109,10 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
     for (const uid of roster) {
       const receiptId = key(`${job.notificationId}:${uid}`)
       // Recheck membership, product role and subscription immediately before SMTP.
+      if (job.audience === 'instructor_change') {
+        const catalog = (await nativFirestore.doc(`organizations/${organizationId}/nativCourseCatalogs/${event.data.data().cycleId}`).get()).data()
+        if (!job.relatedCourseIds?.every((courseId) => catalog?.courses?.some((course: { id: string; instructorIds: string[] }) => course.id === courseId && course.instructorIds.includes(uid)))) { statuses.push('blocked'); continue }
+      }
       if(job.audience==='staff'){
         const access=(await nativFirestore.doc(`organizations/${organizationId}/accessAssignments/${uid}`).get()).data()
         if(!access?.roles?.some((role:string)=>['secretary','placement_coordinator'].includes(role))){
@@ -98,7 +121,7 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
         }
       }
       const address = await recipient(organizationId, uid, job.audience)
-      if (!address || !await organizationIsActive(organizationId)) { statuses.push('blocked'); continue }
+      if (!address || (job.audience !== 'incident' && !await organizationIsActive(organizationId))) { statuses.push('blocked'); continue }
       const content = renderMail(job, student)
       await deliverOnce(store, receiptId, async () => {
         const sent = await transport.sendMail({ from, to: address, subject: content.subject, text: content.text, messageId: `<nativ-${receiptId}@edtrack-nativ.web.app>` })
@@ -110,5 +133,7 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
     jobStatuses.push(status)
     await statusReference.update({ status, errorCode: status === 'failed' ? 'recipient_unavailable_or_delivery_failed' : null, sentCount: statuses.filter((value) => value === 'sent').length, updatedAt: FieldValue.serverTimestamp() })
   }
-  await reference.update({ status: 'completed', deliveryStatus: jobStatuses.every((value) => value === 'sent') ? 'sent' : jobStatuses.some((value) => value === 'delivery_unknown') ? 'delivery_unknown' : 'failed', completedAt: FieldValue.serverTimestamp() })
+  const deliveryStatus = jobStatuses.every((value) => value === 'sent') ? 'sent' : jobStatuses.some((value) => value === 'delivery_unknown') ? 'delivery_unknown' : 'failed'
+  await reference.update({ status: 'completed', deliveryStatus, completedAt: FieldValue.serverTimestamp() })
+  if (event.data.data().kind === 'incident' && jobs[0]?.incident?.id) await nativFirestore.doc(`organizations/${organizationId}/operationalIncidents/${jobs[0].incident.id}`).update({ status: deliveryStatus }).catch(() => undefined)
 })

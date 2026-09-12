@@ -22,7 +22,7 @@ import { syncInstructorAccess } from './instructorAccess'
 
 const service = new NativCommandService(new FirestoreNativRepository(firestore))
 
-export { rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, listAssignmentRuns, publishAssignments, recommendAppeal, runAssignment, selectAssignmentRun, submitAppeal } from './workflowCallables'
+export { changeStudentAssignment, rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, listAssignmentRuns, publishAssignments, recommendAppeal, runAssignment, selectAssignmentRun, submitAppeal } from './workflowCallables'
 export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
 export { deliverNativMail } from './mailDelivery'
 export { getStudentRoster } from './studentRoster'
@@ -350,6 +350,10 @@ const demoAccounts = [
     label: 'מנחה קורס', email: 'instructor@nativ.demo', password: 'NativDemo!2026', uid: 'teacher-course-theater',
     claims: { organizationId: demoCycle.organizationId, active: true, roles: ['course_instructor'], capabilities: [] },
   },
+  {
+    label: 'מנחה מוזיקה', email: 'music-instructor@nativ.demo', password: 'NativDemo!2026', uid: 'teacher-course-music',
+    claims: { organizationId: demoCycle.organizationId, active: true, roles: ['course_instructor'], capabilities: [] },
+  },
 ] as const
 
 export const seedDemoEnvironment = onCall(callableOptions, async () => {
@@ -383,3 +387,5 @@ export const seedDemoEnvironment = onCall(callableOptions, async () => {
 })
 
 export { previewResultDelivery, sendResultDelivery } from './resultDelivery'
+export { previewAssignmentChangeDelivery, sendAssignmentChangeDelivery } from './assignmentChangeDelivery'
+export { listOperationalIncidents } from './operationalIncidents'

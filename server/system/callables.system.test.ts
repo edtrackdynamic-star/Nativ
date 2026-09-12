@@ -12,6 +12,7 @@ import { demoCatalogSnapshot, demoCourses, demoCycle, demoSubmission } from '../
 import { initializeApp as initializeAdminApp, deleteApp as deleteAdminApp } from 'firebase-admin/app'
 import { getFirestore } from 'firebase-admin/firestore'
 import { readFileSync } from 'node:fs'
+import { reportOperationalFailure } from '../../functions/src/operationalIncidents'
 
 interface SeedResult {
   cycleId: string
@@ -236,18 +237,45 @@ describe('Nativ callable system flow', () => {
     expect(changeEvent?.jobs[0]).toMatchObject({ studentId: 'student-demo-001', clusterLabel: 'אמנויות' })
     expect(changeEvent?.jobs[0].recipientIds).toEqual([secretaryUid])
     expect(JSON.stringify(changeEvent)).not.toMatch(/rationale|originalSubmission|aiEvaluation|explanation/)
+    const previewChanges = httpsCallable<Record<string, unknown>, { changes: Array<{ id: string }>; messages: Array<{ email: string; text: string }>; signature: string; recipientSignature: string; version: number }>(functions, 'previewAssignmentChangeDelivery')
+    const sendChanges = httpsCallable<Record<string, unknown>, { alreadyQueued: boolean }>(functions, 'sendAssignmentChangeDelivery')
+    const studentChangePreview = (await previewChanges({ cycleId: demoCycle.id, audience: 'student' })).data
+    expect(studentChangePreview.changes).toHaveLength(1)
+    expect(studentChangePreview.messages.map((message) => message.email)).toEqual(['student@nativ.demo'])
+    expect(studentChangePreview.messages[0].text).toContain('אמנויות')
+    await expect(sendChanges({ cycleId: demoCycle.id, audience: 'student', signature: 'stale', recipientSignature: studentChangePreview.recipientSignature, expectedVersion: studentChangePreview.version })).rejects.toMatchObject({ code: 'functions/aborted' })
+    await sendChanges({ cycleId: demoCycle.id, audience: 'student', signature: studentChangePreview.signature, recipientSignature: studentChangePreview.recipientSignature, expectedVersion: studentChangePreview.version })
+    expect((await previewChanges({ cycleId: demoCycle.id, audience: 'student' })).data.changes).toHaveLength(0)
+    const teacherChangePreview = (await previewChanges({ cycleId: demoCycle.id, audience: 'instructor' })).data
+    expect(teacherChangePreview.messages.every((message) => message.email !== 'student@nativ.demo')).toBe(true)
+    expect(teacherChangePreview.messages.map((message) => message.email).sort()).toEqual(['instructor@nativ.demo', 'music-instructor@nativ.demo'])
+    const oldTeacherEmail = current.courseId === 'course-theater' ? 'instructor@nativ.demo' : 'music-instructor@nativ.demo'
+    const newTeacherEmail = current.courseId === 'course-theater' ? 'music-instructor@nativ.demo' : 'instructor@nativ.demo'
+    expect(teacherChangePreview.messages.find((message) => message.email === oldTeacherEmail)?.text).toContain('יצא/ה מהקורס')
+    expect(teacherChangePreview.messages.find((message) => message.email === newTeacherEmail)?.text).toContain('הצטרף/ה לקורס')
+    await sendChanges({ cycleId: demoCycle.id, audience: 'instructor', signature: teacherChangePreview.signature, recipientSignature: teacherChangePreview.recipientSignature, expectedVersion: teacherChangePreview.version })
+    const secretaryChangePreview = (await previewChanges({ cycleId: demoCycle.id, audience: 'secretary' })).data
+    expect(secretaryChangePreview.messages).toHaveLength(0)
+    expect(secretaryChangePreview.changes).toHaveLength(0)
+    const directChange = httpsCallable<Record<string, unknown>, { workflow: WorkflowState; changeId: string }>(functions, 'changeStudentAssignment')
+    await expect(directChange({ cycleId: demoCycle.id, studentId: 'student-demo-001', clusterId: 'cluster-arts', requestedCourseId, reason: 'אותו קורס', expectedWorkflowVersion: workflow.version })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+    const direct = (await directChange({ cycleId: demoCycle.id, studentId: 'student-demo-001', clusterId: 'cluster-arts', requestedCourseId: current.courseId, reason: 'שינוי בדיקת מערכת', expectedWorkflowVersion: workflow.version })).data
+    workflow = direct.workflow
+    expect(direct.changeId).toMatch(/^manual-/)
+    expect(workflow.assignmentRun?.assignments.find((entry) => entry.studentId === 'student-demo-001' && entry.clusterId === 'cluster-arts')?.courseId).toBe(current.courseId)
+    expect((await previewChanges({ cycleId: demoCycle.id, audience: 'student' })).data.changes).toHaveLength(1)
     const staffPreview=(await previewSend({cycleId:demoCycle.id,audience:'staff'})).data
     expect(staffPreview.messages.length).toBeGreaterThan(0)
     expect(staffPreview.messages.every(m=>m.email!=='student@nativ.demo')).toBe(true)
     await sendResults({cycleId:demoCycle.id,audience:'staff',signature:staffPreview.signature,recipientSignature:staffPreview.recipientSignature,expectedVersion:staffPreview.version})
-    expect((await mailEvents()).size).toBe(4)
+    expect((await mailEvents()).size).toBe(7)
     const change=(await mailEvents()).docs.find(doc=>doc.data().jobs[0].audience==='staff')!.data()
     expect(JSON.stringify(change)).not.toMatch(/rationale|originalSubmission|aiEvaluation|reason|analysis/)
     await expect(execute({cycleId:demoCycle.id,appealId:appeal.id,expectedWorkflowVersion:workflow.version})).rejects.toMatchObject({code:'functions/failed-precondition'})
     await signOut(auth);await signInWithEmailAndPassword(auth,student.email,student.password)
     await expect(previewSend({cycleId:demoCycle.id,audience:'staff'})).rejects.toMatchObject({code:'functions/permission-denied'})
 
-  })
+  }, 120000)
 
   it('keeps access management separate from professional data and supports multiple role holders', async () => {
     await signOut(auth)
@@ -498,4 +526,25 @@ describe('Nativ callable system flow', () => {
     await expect(myAccess()).rejects.toMatchObject({ code: 'functions/permission-denied' })
   }, 45000)
 
+  it('records one redacted system incident and addresses active school and platform managers once', async () => {
+    const core = getFirestore(adminApp)
+    const manager = accounts.find((account) => account.label === 'מנהל גישה')!
+    const managerUid = (await getAdminAuth(adminApp).getUserByEmail(manager.email)).uid
+    await core.doc(`organizations/${demoCycle.organizationId}/members/${managerUid}`).set({ active: true, role: 'school_admin', email: manager.email, fullName: 'מנהל גישה' })
+    await core.doc('platformAdmins/platform-alert-test').set({ active: true, email: 'platform@example.org', role: 'platform_admin' })
+    const stores = { core, nativ: core }
+    const id = await reportOperationalFailure(demoCycle.organizationId, 'send_assignment_change_delivery', 'server_failure', stores)
+    expect(await reportOperationalFailure(demoCycle.organizationId, 'send_assignment_change_delivery', 'server_failure', stores)).toBe(id)
+    const incident = (await core.doc(`organizations/${demoCycle.organizationId}/operationalIncidents/${id}`).get()).data()!
+    expect(incident.occurrences).toBe(2)
+    const alert = (await core.doc(`organizations/${demoCycle.organizationId}/mailEvents/incident-${id}`).get()).data()!
+    expect(alert.jobs[0].recipientIds).toEqual(expect.arrayContaining([managerUid, 'platform-alert-test']))
+    expect(JSON.stringify(alert)).not.toMatch(/studentName|rationale|appealReason|PRIVATE/)
+    await signOut(auth); await signInWithEmailAndPassword(auth, manager.email, manager.password)
+    const list = httpsCallable<undefined, Array<{ id: string }>>(functions, 'listOperationalIncidents')
+    expect((await list()).data.some((entry) => entry.id === id)).toBe(true)
+    const student = accounts.find((account) => account.label === 'תלמיד')!
+    await signOut(auth); await signInWithEmailAndPassword(auth, student.email, student.password)
+    await expect(list()).rejects.toMatchObject({ code: 'functions/permission-denied' })
+  }, 30000)
 })

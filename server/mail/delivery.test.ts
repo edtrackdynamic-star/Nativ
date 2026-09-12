@@ -74,3 +74,26 @@ it('renders one consolidated student message without staff-only names and classe
  const content=renderMail({...job,results:[{studentId:'student-1',name:'שם לצוות',classLabel:'ז1',clusterLabel:'אמנות',courseLabel:'מוזיקה',courseId:'c1'},{studentId:'student-1',name:'שם לצוות',classLabel:'ז1',clusterLabel:'מדע',courseLabel:'רובוטיקה',courseId:'c2'}]},{name:'',classLabel:''})
  expect(content.text).toContain('אמנות: מוזיקה');expect(content.text).toContain('מדע: רובוטיקה');expect(content.text).not.toContain('שם לצוות');expect(content.text).not.toContain('ז1')
 })
+
+it('keeps system incident mail free of student and appeal data', () => {
+  const content = renderMail({ ...job, audience: 'incident', studentId: 'system', incident: { id: 'incident-123', action: 'mail_delivery', category: 'smtp_connection' }, changeLines: [{ studentName: 'PRIVATE', classLabel: 'ז1', clusterLabel: 'ערעור', beforeCourseLabel: 'קורס א', afterCourseLabel: 'קורס ב', direction: 'secretary' }] }, { name: 'PRIVATE', classLabel: 'ז1' })
+  expect(content.subject).toContain('תקלה מערכתית')
+  expect(content.text).toContain('incident-123')
+  for (const secret of ['PRIVATE', 'ז1', 'ערעור', 'קורס א', 'קורס ב']) expect(content.text).not.toContain(secret)
+})
+
+it('renders targeted change messages without reasons or unrelated student identities', () => {
+  const line = { studentName: 'דנה', classLabel: 'ז1', clusterLabel: 'אמנות', beforeCourseLabel: 'תיאטרון', afterCourseLabel: 'מוזיקה', direction: 'student' as const }
+  const student = renderMail({ ...job, changeLines: [line] }, { name: '', classLabel: '' })
+  expect(student.subject).toContain('עדכון השיבוץ')
+  expect(student.text).toContain('תיאטרון')
+  expect(student.text).toContain('מוזיקה')
+  expect(student.text).not.toContain('דנה')
+  expect(student.text).not.toContain('ז1')
+  const teacher = renderMail({ ...job, audience: 'instructor_change', changeLines: [{ ...line, direction: 'left' }] }, { name: '', classLabel: '' })
+  expect(teacher.text).toContain('דנה')
+  expect(teacher.text).toContain('יצא/ה מהקורס תיאטרון')
+  expect(teacher.text).not.toContain('מוזיקה')
+  expect(recipientAllowed('instructor_change', { active: true, role: 'staff' }, undefined)).toBe(false)
+  expect(recipientAllowed('instructor_change', { active: true, role: 'teacher' }, undefined)).toBe(true)
+})
