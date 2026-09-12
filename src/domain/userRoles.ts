@@ -10,3 +10,7 @@ export function effectiveProductRoles(coreRole: string, assigned: RoleId[], acti
 export function canAssignStaffRoles(coreRole: string): boolean {
   return coreRole === 'teacher' || coreRole === 'school_admin'
 }
+
+export function withCourseInstructorRole(roles: RoleId[], hasAssignedCourse: boolean): RoleId[] {
+  return hasAssignedCourse && !roles.includes('student') ? [...new Set([...roles, 'course_instructor' as const])] : roles
+}

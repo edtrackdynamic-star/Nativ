@@ -431,4 +431,60 @@ describe('Nativ callable system flow', () => {
     expect(cycles.some(c=>c.schoolYear===schoolYearId(start))).toBe(true)
   })
 
+  it('grants and revokes instructor access from saved course assignments without activating suspended staff', async () => {
+    const email = 'auto-instructor@nativ.demo'
+    const password = 'DemoPass123!'
+    const teacher = await getAdminAuth(adminApp).createUser({ email, password, displayName: 'מורה אוטומטי' })
+    await getAdminAuth(adminApp).setCustomUserClaims(teacher.uid, { organizationId: demoCycle.organizationId, active: true, roles: [], capabilities: [] })
+    await signOut(auth)
+    const coordinator = accounts.find(account => account.label === 'רכז שיבוץ')!
+    await signInWithEmailAndPassword(auth, coordinator.email, coordinator.password)
+    const create = httpsCallable<Record<string, unknown>, AssignmentCycle>(functions, 'createCycle')
+    const cycle = (await create({ schoolYear: schoolYearId(currentSchoolYearStart()), termLabel: 'בדיקת גישת מורה' })).data
+    const save = httpsCallable<Record<string, unknown>, unknown>(functions, 'saveCycleCatalog')
+    const cluster = { label: 'אמנויות', requiredRankingCount: 1, courses: [{ label: 'תיאטרון', instructorIds: [teacher.uid], minimum: 0, target: 18, maximum: 22, repeatPolicy: 'allowed' }] }
+    await save({ cycleId: cycle.id, expectedVersion: cycle.version, clusters: [cluster] })
+    const secondCycle = (await create({ schoolYear: schoolYearId(currentSchoolYearStart()), termLabel: 'קורס נוסף למורה' })).data
+    await save({ cycleId: secondCycle.id, expectedVersion: secondCycle.version, clusters: [cluster] })
+    const indexed = await getFirestore(adminApp).doc(`organizations/${demoCycle.organizationId}/nativInstructorAccess/${teacher.uid}`).get()
+    expect(indexed.data()?.cycleIds).toContain(cycle.id)
+    expect(indexed.data()?.cycleIds).toContain(secondCycle.id)
+
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, email, password)
+    const myAccess = httpsCallable<undefined, { roles: string[] }>(functions, 'getMyNativAccess')
+    expect((await myAccess()).data.roles).toContain('course_instructor')
+    const instructorWorkspace = httpsCallable<{ cycleId: string }, { courses: Array<{ label: string }> }>(functions, 'getInstructorWorkspace')
+    expect((await instructorWorkspace({ cycleId: cycle.id })).data.courses.map(course => course.label)).toEqual(['תיאטרון'])
+
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, coordinator.email, coordinator.password)
+    const otherInstructor = accounts.find(account => account.label === 'מנחה קורס')!
+    const otherUid = (await getAdminAuth(adminApp).getUserByEmail(otherInstructor.email)).uid
+    const current = (await httpsCallable<{ cycleId: string }, AssignmentCycle>(functions, 'getCycle')({ cycleId: cycle.id })).data
+    await save({ cycleId: cycle.id, expectedVersion: current.version, clusters: [{ ...cluster, courses: [{ ...cluster.courses[0], instructorIds: [otherUid] }] }] })
+    expect((await getFirestore(adminApp).doc(`organizations/${demoCycle.organizationId}/nativInstructorAccess/${teacher.uid}`).get()).data()?.cycleIds).toEqual([secondCycle.id])
+
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, email, password)
+    expect((await myAccess()).data.roles).toContain('course_instructor')
+    expect((await instructorWorkspace({ cycleId: cycle.id })).data.courses).toEqual([])
+    expect((await instructorWorkspace({ cycleId: secondCycle.id })).data.courses).toHaveLength(1)
+
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, coordinator.email, coordinator.password)
+    const secondCurrent = (await httpsCallable<{ cycleId: string }, AssignmentCycle>(functions, 'getCycle')({ cycleId: secondCycle.id })).data
+    await save({ cycleId: secondCycle.id, expectedVersion: secondCurrent.version, clusters: [{ ...cluster, courses: [{ ...cluster.courses[0], instructorIds: [otherUid] }] }] })
+    expect((await getFirestore(adminApp).doc(`organizations/${demoCycle.organizationId}/nativInstructorAccess/${teacher.uid}`).get()).data()?.cycleIds).toEqual([])
+
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, email, password)
+    expect((await myAccess()).data.roles).not.toContain('course_instructor')
+    await expect(instructorWorkspace({ cycleId: cycle.id })).rejects.toMatchObject({ code: 'functions/permission-denied' })
+    await getAdminAuth(adminApp).setCustomUserClaims(teacher.uid, { organizationId: demoCycle.organizationId, active: false, roles: [], capabilities: [] })
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, email, password)
+    await expect(myAccess()).rejects.toMatchObject({ code: 'functions/permission-denied' })
+  }, 45000)
+
 })

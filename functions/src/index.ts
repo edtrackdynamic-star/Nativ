@@ -18,6 +18,7 @@ import { catalogSnapshotDocumentPath, courseCatalogDocumentPath, cycleDocumentPa
 import { callableOptions, coreFirestore, nativFirestore as firestore } from './firebase'
 import { actorFromRequest, inputRecord, requiredInteger, requiredString } from './request'
 import { verifyStoredCycleDocument } from './courseDescriptionImport'
+import { syncInstructorAccess } from './instructorAccess'
 
 const service = new NativCommandService(new FirestoreNativRepository(firestore))
 
@@ -170,6 +171,7 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
     const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
     if(data.expectedVersion!==undefined && cycle?.version!==data.expectedVersion)throw new HttpsError('aborted','התהליך השתנה מאז פתיחת העורך. פתחו אותו מחדש לפני שמירה.')
     if (cycle?.status !== 'draft') throw new HttpsError('failed-precondition', 'ניתן לערוך קורסים רק לפני פתיחת הבחירה')
+    await syncInstructorAccess(transaction, actor.organizationId, cycleId, teacherIds)
     transaction.set(firestore.doc(catalogSnapshotDocumentPath(actor.organizationId, cycleId)), catalog)
     transaction.set(firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId)), { organizationId: actor.organizationId, cycleId, courses, updatedAt: now, updatedBy: actor.uid })
     transaction.set(cycleReference, { ...cycle, version: cycle.version + 1, updatedAt: now, updatedBy: actor.uid })

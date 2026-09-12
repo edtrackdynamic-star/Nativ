@@ -7,6 +7,7 @@ import { auditEventDocumentPath } from '../../server/firestore/paths'
 import { callableOptions, coreFirestore, nativFirestore } from './firebase'
 import { actorFromRequest, inputRecord, requiredString, roleCapabilityMap } from './request'
 import { canAssignStaffRoles, effectiveProductRoles } from '../../src/domain/userRoles'
+import { rolesWithAssignedCourses } from './instructorAccess'
 
 export interface AccessUserSummary { uid: string; email?: string; displayName?: string; roles: RoleId[]; capabilities: CapabilityId[]; active: boolean; coreRole?: string }
 
@@ -46,24 +47,28 @@ export const listAccessUsers = onCall(callableOptions, async (request) => {
   const actor = await requireAccessManager(request, 'read')
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const result = await getAuth().listUsers(1000)
-    return result.users.filter((user) => user.customClaims?.organizationId === actor.organizationId).map((user): AccessUserSummary => {
+    const users = result.users.filter((user) => user.customClaims?.organizationId === actor.organizationId).map((user): AccessUserSummary => {
       const coreRole = validRoles(user.customClaims?.roles).includes('student') ? 'student' : 'teacher'
       const roles = effectiveProductRoles(coreRole, validRoles(user.customClaims?.roles), user.customClaims?.active === true)
       return { uid: user.uid, email: user.email, displayName: user.displayName, coreRole, roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], active: user.customClaims?.active === true }
     })
+    const derived = await rolesWithAssignedCourses(actor.organizationId, new Map(users.filter(user => user.active && user.coreRole !== 'student').map(user => [user.uid, user.roles])))
+    return users.map(user => ({ ...user, roles: derived.get(user.uid) ?? user.roles }))
   }
   const [members, assignments] = await Promise.all([
     coreFirestore.collection(`organizations/${actor.organizationId}/members`).limit(1000).get(),
     nativFirestore.collection(`organizations/${actor.organizationId}/accessAssignments`).get(),
   ])
   const accessByUid = new Map(assignments.docs.map((entry) => [entry.id, entry.data()]))
-  return members.docs.map((member): AccessUserSummary => {
+  const users = members.docs.map((member): AccessUserSummary => {
     const memberData = member.data()
     const access = accessByUid.get(member.id)
     const assignedRoles = access?.active === false ? [] : validRoles(access?.roles)
     const roles = effectiveProductRoles(String(memberData.role ?? ''), assignedRoles, memberData.active === true && access?.active !== false)
     return { uid: member.id, email: String(memberData.email ?? ''), displayName: String(memberData.fullName ?? ''), roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], active: memberData.active === true && access?.active !== false, coreRole: String(memberData.role ?? '') }
   })
+  const derived = await rolesWithAssignedCourses(actor.organizationId, new Map(users.filter(user => user.active && ['teacher', 'school_admin'].includes(user.coreRole ?? '')).map(user => [user.uid, user.roles])))
+  return users.map(user => ({ ...user, roles: derived.get(user.uid) ?? user.roles }))
 })
 
 export const setUserAccess = onCall(callableOptions, async (request) => {

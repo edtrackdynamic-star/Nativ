@@ -3,6 +3,8 @@ import { HttpsError } from 'firebase-functions/v2/https'
 import { capabilityIds, roleIds, type ActorContext, type CapabilityId, type RoleId } from '../../src/domain/access'
 import { coreFirestore, nativFirestore } from './firebase'
 import { effectiveProductRoles } from '../../src/domain/userRoles'
+import { withCourseInstructorRole } from '../../src/domain/userRoles'
+import { hasAssignedCourse } from './instructorAccess'
 
 type CallableAuth = NonNullable<CallableRequest['auth']>
 
@@ -60,7 +62,7 @@ export async function actorFromRequest(request: CallableRequest, operation: 'rea
   if (process.env.FUNCTIONS_EMULATOR === 'true') {
     const actor = actorFromAuth(request.auth)
     const coreRole = actor.roles.includes('student') ? 'student' : 'teacher'
-    const roles = effectiveProductRoles(coreRole, actor.roles)
+    const roles = coreRole === 'student' ? effectiveProductRoles(coreRole, actor.roles) : withCourseInstructorRole(effectiveProductRoles(coreRole, actor.roles), await hasAssignedCourse(actor.organizationId, actor.uid))
     return { ...actor, studentClassId: String(request.auth?.token.classId ?? ''), organizationName: 'בית ספר לדוגמה', organizationLogoPath: '', roles, capabilities: [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))], accessMode: 'full', coreRole, displayName: '', email: String(request.auth?.token.email ?? '') }
   }
   if (!request.auth) throw new HttpsError('unauthenticated', 'נדרשת כניסה למערכת')
@@ -83,7 +85,10 @@ export async function actorFromRequest(request: CallableRequest, operation: 'rea
   }
   const accessData = productAccess.data()
   const assignedRoles = accessData?.active === false ? [] : allowedValues<RoleId>(accessData?.roles, roleIds)
-  const roles = effectiveProductRoles(String(membershipData?.role ?? ''), assignedRoles, accessData?.active !== false)
+  const coreRole = String(membershipData?.role ?? '')
+  const baseRoles = effectiveProductRoles(coreRole, assignedRoles, accessData?.active !== false)
+  const roles = ['teacher', 'school_admin'].includes(coreRole) && accessData?.active !== false
+    ? withCourseInstructorRole(baseRoles, await hasAssignedCourse(organizationId, request.auth.uid)) : baseRoles
   const capabilities = [...new Set(roles.flatMap((role) => roleCapabilityMap[role]))]
   const studentProfile = roles.includes('student') ? await coreFirestore.doc(`organizations/${organizationId}/students/${request.auth.uid}`).get() : undefined
   return {
@@ -95,7 +100,7 @@ export async function actorFromRequest(request: CallableRequest, operation: 'rea
     roles,
     capabilities,
     accessMode,
-    coreRole: String(membershipData?.role ?? ''),
+    coreRole,
     displayName: String(membershipData?.fullName ?? request.auth.token.name ?? ''),
     email: String(membershipData?.email ?? request.auth.token.email ?? ''),
   }
