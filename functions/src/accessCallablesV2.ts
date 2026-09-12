@@ -94,7 +94,8 @@ export const setUserAccess = onCall(callableOptions, async (request) => {
   }
   const membership = await coreFirestore.doc(`organizations/${actor.organizationId}/members/${uid}`).get()
   if (!membership.exists || membership.data()?.active !== true) throw new HttpsError('permission-denied', 'המשתמש אינו חבר פעיל בארגון')
-  if (roles.length && !canAssignStaffRoles(String(membership.data()?.role ?? ''))) throw new HttpsError('failed-precondition', 'תפקידי צוות ניתנים להקצאה למורים ולמנהלים בלבד')
+  if (membership.data()?.role === 'staff' && roles.includes('course_instructor')) throw new HttpsError('failed-precondition', 'גישה להנחיית קורס ניתנת למורים בלבד')
+  if (roles.length && !canAssignStaffRoles(String(membership.data()?.role ?? ''))) throw new HttpsError('failed-precondition', 'תפקידי צוות ניתנים להקצאה לאנשי צוות, למורים ולמנהלים בלבד')
   const reference = nativFirestore.doc(`organizations/${actor.organizationId}/accessAssignments/${uid}`)
   const previous = await reference.get()
   if (validRoles(previous.data()?.roles).includes('access_manager') && (!roles.includes('access_manager') || data.active === false)) {

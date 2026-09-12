@@ -194,7 +194,7 @@ export const listEligibleInstructors = onCall(callableOptions, async (request) =
     return result.users.filter((user) => user.customClaims?.organizationId === actor.organizationId && !user.customClaims?.roles?.includes('student')).map((user) => ({ uid: user.uid, displayName: user.displayName || user.email || 'חבר צוות' }))
   }
   const members = await coreFirestore.collection(`organizations/${actor.organizationId}/members`).where('active', '==', true).limit(1000).get()
-  return members.docs.filter((member) => member.data().role !== 'student').map((member) => ({ uid: member.id, displayName: String(member.data().fullName ?? member.data().email ?? 'חבר צוות') }))
+  return members.docs.filter((member) => ['teacher', 'school_admin'].includes(member.data().role)).map((member) => ({ uid: member.id, displayName: String(member.data().fullName ?? member.data().email ?? 'חבר צוות') }))
 })
 
 export const getCycleCatalog = onCall(callableOptions, async (request) => {

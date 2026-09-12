@@ -46,7 +46,7 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
   const { organizationId } = event.params
   const reference = event.data.ref
   const jobs = event.data.data().jobs as MailJob[]
-  if (!segment(organizationId) || !Array.isArray(jobs) || jobs.some((job) => !job || typeof job.notificationId !== 'string' || typeof job.studentId !== 'string' || !segment(job.notificationId) || !segment(job.studentId) || !['student', 'secretary','staff'].includes(job.audience) || (job.audience==='staff' && (!job.recipientId || !segment(job.recipientId))))) {
+  if (!segment(organizationId) || !Array.isArray(jobs) || jobs.some((job) => !job || typeof job.notificationId !== 'string' || typeof job.studentId !== 'string' || !segment(job.notificationId) || !segment(job.studentId) || !['student', 'secretary','staff'].includes(job.audience) || (job.audience==='staff' && (!job.recipientId || !segment(job.recipientId))) || (job.recipientIds && (!Array.isArray(job.recipientIds) || job.recipientIds.some(uid=>typeof uid!=='string'||!segment(uid)))))) {
     await reference.update({ status: 'failed', errorCode: 'mail_event_invalid' }); return
   }
   const attempt = await nativFirestore.runTransaction(async (transaction) => {
@@ -65,12 +65,13 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
   try { await transport.verify() }
   catch { throw new Error('smtp_connection_failed') }
   const store = new FirestoreDeliveryStore(nativFirestore, `${reference.path}/receipts`)
+  const jobStatuses: string[] = []
   for (const job of jobs) {
     const statusReference = nativFirestore.doc(`organizations/${organizationId}/mailStatuses/${job.notificationId}`)
     // Freeze recipients once: replayed events must not acquire new recipients.
     let roster = (await statusReference.get()).data()?.recipientIds as string[] | undefined
     if (!roster) {
-      const candidates = job.audience === 'staff' ? [job.recipientId!] : job.audience === 'student' ? [job.studentId] : (await nativFirestore.collection(`organizations/${organizationId}/accessAssignments`).where('roles', 'array-contains', 'secretary').get()).docs.filter((doc) => doc.data().active === true).map((doc) => doc.id)
+      const candidates = job.recipientIds ?? (job.audience === 'staff' ? [job.recipientId!] : job.audience === 'student' ? [job.studentId] : (await nativFirestore.collection(`organizations/${organizationId}/accessAssignments`).where('roles', 'array-contains', 'secretary').get()).docs.filter((doc) => doc.data().active === true).map((doc) => doc.id))
       roster = await nativFirestore.runTransaction(async (transaction) => {
         const existing = await transaction.get(statusReference)
         if (existing.exists) return existing.data()!.recipientIds as string[]
@@ -106,7 +107,8 @@ export const deliverNativMail = onDocumentCreated({ document: 'organizations/{or
       statuses.push(String((await nativFirestore.doc(`${reference.path}/receipts/${receiptId}`).get()).data()?.status ?? 'delivery_unknown'))
     }
     const status = statuses.length && statuses.every((value) => value === 'sent') ? 'sent' : statuses.some((value) => ['sending', 'delivery_unknown'].includes(value)) ? 'delivery_unknown' : 'failed'
-    await statusReference.update({ status, sentCount: statuses.filter((value) => value === 'sent').length, updatedAt: FieldValue.serverTimestamp() })
+    jobStatuses.push(status)
+    await statusReference.update({ status, errorCode: status === 'failed' ? 'recipient_unavailable_or_delivery_failed' : null, sentCount: statuses.filter((value) => value === 'sent').length, updatedAt: FieldValue.serverTimestamp() })
   }
-  await reference.update({ status: 'completed', completedAt: FieldValue.serverTimestamp() })
+  await reference.update({ status: 'completed', deliveryStatus: jobStatuses.every((value) => value === 'sent') ? 'sent' : jobStatuses.some((value) => value === 'delivery_unknown') ? 'delivery_unknown' : 'failed', completedAt: FieldValue.serverTimestamp() })
 })

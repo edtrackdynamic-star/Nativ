@@ -10,4 +10,7 @@ it('keeps staff roles separate and fails closed for unknown membership types', (
   expect(effectiveProductRoles('teacher', ['student', 'course_instructor'])).toEqual(['course_instructor'])
   expect(effectiveProductRoles('unknown', ['access_manager'])).toEqual([])
   expect(canAssignStaffRoles('school_admin')).toBe(true)
+  expect(effectiveProductRoles('staff', ['secretary'])).toEqual(['secretary'])
+  expect(effectiveProductRoles('staff', ['secretary', 'course_instructor'])).toEqual(['secretary'])
+  expect(canAssignStaffRoles('staff')).toBe(true)
 })

@@ -15,6 +15,8 @@ describe('approved mail boundary', () => {
     const member = { active: true, role: 'school_admin' }
     expect(recipientAllowed('secretary', member, { active: true, roles: ['access_manager'] })).toBe(false)
     expect(recipientAllowed('secretary', member, { active: true, roles: ['secretary'] })).toBe(true)
+    expect(recipientAllowed('secretary', { active: true, role: 'staff' }, { active: true, roles: ['secretary'] })).toBe(true)
+    expect(recipientAllowed('secretary', { active: true, role: 'student' }, { active: true, roles: ['secretary'] })).toBe(false)
     expect(recipientAllowed('secretary', { ...member, active: false }, { active: true, roles: ['secretary'] })).toBe(false)
     expect(recipientAllowed('secretary', member, { active: false, roles: ['secretary'] })).toBe(false)
   })
@@ -31,6 +33,12 @@ describe('approved mail boundary', () => {
   it('includes approved operational fields for a secretary', () => {
     const text = renderMail({ ...job, audience: 'secretary' }, { name: 'שם לדוגמה', classLabel: 'ז1' }).text
     for (const expected of ['שם לדוגמה', 'ז1', 'אמנות', 'תיאטרון', 'מוזיקה', 'מועד הביצוע']) expect(text).toContain(expected)
+  })
+  it('renders one publication summary for secretaries without private rationale', () => {
+    const content = renderMail({ ...job, audience: 'secretary', studentId: 'summary', results: [{ studentId: 'student-1', name: 'דנה', classLabel: 'ז1', clusterLabel: 'אמנות', courseLabel: 'מוזיקה', courseId: 'music' }] }, { name: '', classLabel: '' })
+    expect(content.subject).toContain('השיבוץ פורסם')
+    expect(content.text).toContain('דנה · ז1 · אמנות: מוזיקה')
+    expect(content.text).not.toContain('student-1')
   })
   it('rejects multiple-recipient and header-injection addresses', () => {
     for (const input of ['a@b.com,b@c.com', 'a@b.com\r\nBcc: x@y.com', 'Name <a@b.com>', 'a@b.com;b@c.com']) expect(canonicalEmail(input)).toBeNull()

@@ -3,6 +3,7 @@ export interface MailJob {
   notificationId: string
   audience: 'student' | 'secretary' | 'staff'
   recipientId?: string
+  recipientIds?: string[]
   courseId?: string
   results?: Array<{studentId:string;name:string;classLabel:string;clusterLabel:string;courseLabel:string;courseId:string}>
   studentId: string
@@ -25,16 +26,19 @@ export function canonicalEmail(value: unknown): string | null {
 
 export function recipientAllowed(audience: MailJob['audience'], member: Record<string, unknown> | undefined, access: Record<string, unknown> | undefined): boolean {
   if (member?.active !== true || member.isDemo === true || access?.active === false) return false
-  if(audience==='staff')return ['teacher','school_admin'].includes(String(member.role)) && access?.active===true && Array.isArray(access.roles) && access.roles.some(r=>['secretary','placement_coordinator','course_instructor'].includes(r))
-  return audience === 'student' ? member.role === 'student' : access?.active === true && Array.isArray(access.roles) && access.roles.includes('secretary')
+  if(audience==='staff')return access?.active===true && Array.isArray(access.roles) && (
+    (['teacher','staff','school_admin'].includes(String(member.role)) && access.roles.includes('secretary')) ||
+    (['teacher','school_admin'].includes(String(member.role)) && access.roles.some(r=>['placement_coordinator','course_instructor'].includes(r)))
+  )
+  return audience === 'student' ? member.role === 'student' : ['teacher','staff','school_admin'].includes(String(member.role)) && access?.active === true && Array.isArray(access.roles) && access.roles.includes('secretary')
 }
 
 export function renderMail(job: MailJob, student: { name: string; classLabel: string }): { subject: string; text: string } {
   const when = new Date(job.occurredAt)
   if (!Number.isFinite(when.getTime())) throw new Error('Invalid mail timestamp')
   if(job.results?.length){
-    const subject=job.audience==='staff'?'נתיב — תוצאות השיבוץ':'נתיב — השיבוצים שלך'
-    const rows=job.results.map(row=>job.audience==='staff'?`${row.name} · ${row.classLabel} · ${row.clusterLabel}: ${row.courseLabel}`:`${row.clusterLabel}: ${row.courseLabel}`)
+    const subject=job.audience==='staff'?'נתיב — תוצאות השיבוץ':job.audience==='secretary'?'נתיב — השיבוץ פורסם':'נתיב — השיבוצים שלך'
+    const rows=job.results.map(row=>job.audience==='student'?`${row.clusterLabel}: ${row.courseLabel}`:`${row.name} · ${row.classLabel} · ${row.clusterLabel}: ${row.courseLabel}`)
     return {subject,text:[...rows,'','לצפייה בנתיב: https://edtrack-nativ.web.app/'].join('\n')}
   }
   const subject = job.audience === 'staff' ? 'נתיב — תוצאות השיבוץ' : job.audience === 'secretary' ? 'נתיב — שינוי שיבוץ שבוצע' : 'נתיב — השיבוץ שלך'
