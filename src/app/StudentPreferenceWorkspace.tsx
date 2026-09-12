@@ -5,8 +5,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChoiceContext } from '../application/NativCommandService'
 import type { ClusterPreference } from '../domain/preferences'
 import type { AssignmentCycle } from '../domain/cycle'
+import { choiceAcceptsResponses, choiceDeadlinePassed } from '../domain/choiceDeadline'
+import { formatIsraelDateTime } from './israelDateTime'
 import type { WorkflowState } from '../domain/workflow'
-import { getChoiceContext, getCycle, getWorkflow, listMySubmissions, savePreferenceDraft, submitAppeal, submitPreferenceDraft } from './firebaseApi'
+import { downloadCycleDocument, getChoiceContext, getCycle, getWorkflow, listMySubmissions, savePreferenceDraft, submitAppeal, submitPreferenceDraft } from './firebaseApi'
 
 interface StudentPreferenceWorkspaceProps { cycleId: string; readOnly?: boolean }
 
@@ -25,6 +27,7 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false }: Studen
   const [savedSignature, setSavedSignature] = useState('')
   const [appealPending, setAppealPending] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [now, setNow] = useState(() => new Date().toISOString())
   const draftVersionRef = useRef(0)
   const lastSavedSignature = useRef('')
   const [appealDraft, setAppealDraft] = useState({ clusterId: '', requestedCourseId: '', reason: '' })
@@ -57,14 +60,23 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false }: Studen
     return () => { alive.current = false; initialized.current = false }
   }, [cycleId])
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(new Date().toISOString())
+      void getCycle(cycleId).then(updated => { if (alive.current) setCycle(updated) }).catch(() => undefined)
+    }, 30000)
+    return () => window.clearInterval(timer)
+  }, [cycleId])
+
   const signature = JSON.stringify(preferences)
   const isSubmitted = Boolean(submittedSignature && signature === submittedSignature)
   useUnsavedChanges(Boolean(context) && (signature !== savedSignature || saving))
   const complete = useMemo(() => rankingsComplete(context?.catalog.clusters ?? [], preferences), [context, preferences])
+  const deadlinePassed = Boolean(cycle && choiceDeadlinePassed(cycle, now))
 
   useEffect(() => {
     const signature = JSON.stringify(preferences)
-    if (readOnly || !initialized.current || !context?.catalog.clusters.length || cycle?.status !== 'choice_open' || saving || signature === lastSavedSignature.current || signature === failedSignature) return
+    if (readOnly || !initialized.current || !context?.catalog.clusters.length || !cycle || !choiceAcceptsResponses(cycle, now) || saving || signature === lastSavedSignature.current || signature === failedSignature) return
     const timer = window.setTimeout(() => {
       if (busy.current || !alive.current) return
       busy.current = true
@@ -76,10 +88,10 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false }: Studen
         .finally(() => { busy.current = false; if (alive.current) setSaving(false) })
     }, 900)
     return () => window.clearTimeout(timer)
-  }, [context, cycle, cycleId, preferences, saving, readOnly, failedSignature])
+  }, [context, cycle, cycleId, preferences, saving, readOnly, failedSignature, now])
 
   async function submit() {
-    if (!complete || busy.current || readOnly || isSubmitted) return
+    if (!complete || busy.current || readOnly || isSubmitted || !cycle || !choiceAcceptsResponses(cycle, new Date().toISOString())) return
     busy.current = true
     try {
       setSaving(true)
@@ -140,9 +152,10 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false }: Studen
         <span className="status-pill">{isSubmitted ? 'הוגש' : submissionCount ? 'שינויים שטרם הוגשו' : 'טיוטה'}</span>
       </div>
       <p className="workspace-message" aria-live="polite">{message}</p>
+      {cycle.choiceDeadlineEnabled && cycle.choiceClosesAt && <p className={`choice-deadline ${deadlinePassed ? 'expired' : ''}`} role="status">{deadlinePassed ? 'מועד ההגשה הסתיים' : 'ניתן להגיש עד'}: {formatIsraelDateTime(cycle.choiceClosesAt)}{deadlinePassed && '. הבחירות שהוגשו נשמרו. אם המועד יוארך, תוכלו להמשיך לאחר רענון.'}</p>}
       {failedSignature === signature && <button className="secondary-action" onClick={() => setFailedSignature('')}>ניסיון שמירה נוסף</button>}
       <p>{preferences.reduce((sum, entry) => sum + entry.rankings.filter((ranking) => ranking.courseId).length, 0)} מתוך {context.catalog.clusters.reduce((sum, entry) => sum + entry.requiredRankingCount, 0)} בחירות הושלמו</p>
-      <ChoiceForm clusters={context.catalog.clusters} design={context.catalog.formDesign} preferences={preferences} onChange={setPreferences} onSubmit={()=>void submit()} disabled={readOnly || saving} submitDisabled={!complete || saving || isSubmitted || readOnly} />
+      <ChoiceForm clusters={context.catalog.clusters} design={context.catalog.formDesign} preferences={preferences} onChange={setPreferences} onOpenDocument={()=>void downloadCycleDocument(cycle.id).catch(()=>setMessage('פתיחת המסמך נכשלה. בקשו מהרכז לבדוק את הקובץ.'))} onSubmit={()=>void submit()} disabled={readOnly || saving || deadlinePassed} submitDisabled={!complete || saving || isSubmitted || readOnly || deadlinePassed} />
       <div className="workspace-actions">
         <span>{isSubmitted ? 'הבחירות המוצגות הוגשו ונשמרו' : submissionCount ? 'יש להגיש מחדש כדי לעדכן את הבחירות שהוגשו' : 'הבחירות טרם הוגשו'}</span>
       </div>

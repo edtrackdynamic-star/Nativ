@@ -12,7 +12,7 @@ import type { ClusterSnapshot, ClusterPreference } from '../domain/preferences'
 import { defaultFormDesign, parseFormDesign, safeLink, type FormDesign } from '../domain/formDesign'
 import { includesClass } from '../domain/classEligibility'
 import { ChoiceForm } from './ChoiceForm'
-import { createCycle, getStudentRoster, getCycleCatalog, listEligibleClasses, listEligibleInstructors, saveCycleCatalog, type CatalogClusterDraft, type CatalogCourseDraft } from './firebaseApi'
+import { createCycle, downloadCycleDocument, getStudentRoster, getCycleCatalog, listEligibleClasses, listEligibleInstructors, saveCycleCatalog, type CatalogClusterDraft, type CatalogCourseDraft } from './firebaseApi'
 
 type CourseEdit = Omit<CatalogCourseDraft, 'minimum' | 'target' | 'maximum'> & { minimum: number | string; target: number | string; maximum: number | string }
 type ClusterEdit = Omit<CatalogClusterDraft, 'courses' | 'requiredRankingCount'> & { courses: CourseEdit[]; requiredRankingCount: number | string }
@@ -44,7 +44,7 @@ export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cy
   useEffect(()=>{ if(!cycleId)return;let active=true;void Promise.all([listEligibleInstructors(),getCycleCatalog(cycleId),listEligibleClasses()]).then(([teachers,data,schoolClasses])=>{
     if(!active)return;setInstructors(teachers);setClasses(schoolClasses)
     const next=data.catalog?.clusters.length ? data.catalog.clusters.map(cluster=>({...(cluster.eligibleClassIds===undefined?{}:{eligibleClassIds:cluster.eligibleClassIds}),...(cluster.capacityFlexibility===undefined?{}:{capacityFlexibility:cluster.capacityFlexibility}),label:cluster.label,description:cluster.description??'',rationaleMode:cluster.rationaleMode??'optional',requiredRankingCount:cluster.requiredRankingCount,balanceByClass:cluster.balanceByClass===true,courses:data.courses.filter(course=>course.clusterId===cluster.clusterId).map(course=>({...(course.capacity.limit===undefined?{}:{capacityLimit:course.capacity.limit}),label:course.label,description:course.description,documentUrl:course.documentUrl??'',imageUrl:course.imageUrl??'',subjectArea:course.subjectArea,instructorIds:course.instructorIds,minimum:course.capacity.minimum,target:course.capacity.target,maximum:course.capacity.maximum,repeatPolicy:course.repeatPolicy}))})) : [emptyCluster()]
-    const form={...defaultFormDesign,...data.catalog?.formDesign,documentLinkVisible:data.catalog?.formDesign?.documentLinkVisible??Boolean(data.catalog?.formDesign?.documentUrl)};setClusters(next);setDesign(form);setSavedSignature(JSON.stringify({clusters:next,design:form}));setLoaded(true)
+    const form={...defaultFormDesign,...data.catalog?.formDesign,documentLinkVisible:data.catalog?.formDesign?.documentLinkVisible??Boolean(data.catalog?.formDesign?.documentUrl || data.catalog?.formDesign?.documentStoragePath)};setClusters(next);setDesign(form);setSavedSignature(JSON.stringify({clusters:next,design:form}));setLoaded(true)
   }).catch(()=>{if(active)setMessage('לא ניתן לטעון את הגדרות התהליך. נסו לפתוח אותו מחדש.')});return()=>{active=false}
   },[cycleId])
   useEffect(()=>{if(!cycleId)return;let active=true;void getStudentRoster(cycleId).then(values=>{if(active)setRoster({cycleId,students:values})}).catch(()=>{if(active)setRoster(null)});return()=>{active=false}},[cycleId])
@@ -70,21 +70,27 @@ export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cy
     {locked && <p className="read-only-notice">הטופס פתוח לצפייה. לשינוי מבנה הבחירה יש ליצור תהליך חדש, כדי לשמור על הבחירות הקיימות.</p>}
     <nav className="role-navigation" aria-label="עריכת טופס">{(['courses','design'] as const).map(id=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{id==='courses'?'מקבצים וקורסים':'עיצוב והוראות'}</button>)}<button className={tab==='preview'?'active':''} onClick={()=>preview()} disabled={!loaded}>תצוגת תלמיד</button></nav>
     {!loaded ? <p>טוען את הטופס…</p> : <>
+    {locked && design.documentUrl && <p><a href={design.documentUrl} target="_blank" rel="noopener noreferrer">פתיחת תקצירי הקורסים ↗</a></p>}
+    {locked && design.documentStoragePath && <button type="button" className="secondary-action" onClick={() => void downloadCycleDocument(cycle.id).catch(()=>setMessage('פתיחת המסמך נכשלה. נסו שוב.'))}>הורדת תקצירי הקורסים</button>}
     <fieldset className="workspace-boundary" disabled={locked || pending}>
     {tab==='design' && <div className="form-editor setup-grid">
       <label>כותרת הטופס<input maxLength={150} value={design.title} onChange={e=>setDesign({...design,title:e.target.value})}/></label>
       <label>טקסט כפתור ההגשה<input maxLength={60} value={design.submitLabel} onChange={e=>setDesign({...design,submitLabel:e.target.value})}/></label>
       <label>פתיח<textarea rows={4} maxLength={4000} value={design.introduction} onChange={e=>setDesign({...design,introduction:e.target.value})}/></label>
+      {design.introduction !== defaultFormDesign.introduction && <button type="button" className="secondary-action" onClick={()=>setDesign({...design,introduction:defaultFormDesign.introduction})}>החלת נוסח הפתיח המוצע</button>}
       <label>הוראות לבחירה<textarea rows={4} maxLength={2000} value={design.instructions} onChange={e=>setDesign({...design,instructions:e.target.value})}/></label>
-      <label>מסמך התכנים המלא (רשות)<input type="url" value={design.documentUrl} onChange={e=>setDesign({...design,documentUrl:e.target.value})}/></label>
+      <p>מסמך תקצירי הקורסים: {design.documentName || (design.documentUrl ? 'Google Docs' : 'לא נוסף מסמך')}. אפשר להוסיף או להחליף אותו בלשונית מקבצים וקורסים.</p>
       <label className="setup-option"><input type="checkbox" checked={design.documentLinkVisible} onChange={e=>setDesign({...design,documentLinkVisible:e.target.checked})}/>הצגת הקישור לתלמידים בראש הטופס</label>
       <label>קישור לתמונת פתיחה<input type="url" value={design.coverUrl} onChange={e=>setDesign({...design,coverUrl:e.target.value})}/></label>
       <label>צבע מוביל<select value={design.theme} onChange={e=>setDesign({...design,theme:e.target.value as FormDesign['theme']})}><option value="blue">כחול</option><option value="teal">טורקיז</option><option value="purple">סגול</option></select></label>
       <label>תצוגת הקורסים<select value={design.layout} onChange={e=>setDesign({...design,layout:e.target.value as FormDesign['layout']})}><option value="cards">כרטיסים</option><option value="list">רשימה</option></select></label>
     </div>}
     <div hidden={tab!=='courses'}><CourseDescriptionImport
+      cycleId={cycle.id}
       documentUrl={design.documentUrl}
-      onDocumentUrl={documentUrl=>setDesign({...design,documentUrl})}
+      documentStoragePath={design.documentStoragePath}
+      documentName={design.documentName}
+      onSourceChange={source=>setDesign(current=>({...current,...source,documentLinkVisible:Boolean(source.documentUrl || source.documentStoragePath)}))}
       candidates={clusters.flatMap((cluster,ci)=>cluster.courses.map((course,ti)=>({
         id:`${ci}-${ti}`, clusterLabel:cluster.label||`מקבץ ${ci+1}`, label:course.label,
         instructorNames:course.instructorIds.map(id=>instructors.find(teacher=>teacher.uid===id)?.displayName??'').filter(Boolean), description:course.description,
@@ -118,7 +124,7 @@ export function CycleSetupWorkspace({ cycle, onChanged, readOnly = false }: { cy
     </article>)}<button className="secondary-action" onClick={()=>setClusters([...clusters,emptyCluster()])}>הוספת מקבץ</button></div>
     {tab!=='preview' && !locked && <div className="editor-save"><button className="primary-action" onClick={()=>void save()}>שמירת הטופס והקורסים</button><span>{signature===savedSignature?'כל השינויים נשמרו':'יש שינויים שלא נשמרו'}</span></div>}
     </fieldset>
-    {tab==='preview' && <div><div className="setup-grid"><label>תצוגה לפי כיתה<select value={previewClass} onChange={e=>preview(e.target.value)}><option value="*">כל המקבצים</option>{classes.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}<option value="">ללא שיוך לכיתה</option></select></label></div>{!previewClusters.length && <p>אין מקבצים פתוחים לכיתה זו.</p>}<div className="workspace-actions"><button className="secondary-action" aria-pressed={device==='desktop'} onClick={()=>setDevice('desktop')}>מחשב</button><button className="secondary-action" aria-pressed={device==='mobile'} onClick={()=>setDevice('mobile')}>נייד</button></div><p>תצוגה מקדימה — ההתנסות אינה שומרת בחירות של תלמידים.</p><p role="status">{previewMessage}</p><div className={`student-preview ${device}`}>{previewClusters.length>0 && <ChoiceForm clusters={previewClusters} design={parseFormDesign(design)} preferences={previewPreferences} onChange={setPreviewPreferences} onSubmit={()=>setPreviewMessage('הטופס תקין ומוכן להגשה. לא נשלחה הגשה אמיתית.')} preview />}</div></div>}
+    {tab==='preview' && <div><div className="setup-grid"><label>תצוגה לפי כיתה<select value={previewClass} onChange={e=>preview(e.target.value)}><option value="*">כל המקבצים</option>{classes.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}<option value="">ללא שיוך לכיתה</option></select></label></div>{!previewClusters.length && <p>אין מקבצים פתוחים לכיתה זו.</p>}<div className="workspace-actions"><button className="secondary-action" aria-pressed={device==='desktop'} onClick={()=>setDevice('desktop')}>מחשב</button><button className="secondary-action" aria-pressed={device==='mobile'} onClick={()=>setDevice('mobile')}>נייד</button></div><p>תצוגה מקדימה — ההתנסות אינה שומרת בחירות של תלמידים.</p><p role="status">{previewMessage}</p><div className={`student-preview ${device}`}>{previewClusters.length>0 && <ChoiceForm clusters={previewClusters} design={parseFormDesign(design)} preferences={previewPreferences} onChange={setPreviewPreferences} onOpenDocument={()=>void downloadCycleDocument(cycle.id,design.documentStoragePath).catch(()=>setPreviewMessage('פתיחת המסמך נכשלה. נסו שוב.'))} onSubmit={()=>setPreviewMessage('הטופס תקין ומוכן להגשה. לא נשלחה הגשה אמיתית.')} preview />}</div></div>}
     </>}
   </section>
 }

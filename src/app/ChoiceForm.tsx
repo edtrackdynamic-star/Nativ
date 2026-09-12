@@ -1,17 +1,26 @@
 import type { ClusterPreference, ClusterSnapshot } from '../domain/preferences'
 import { defaultFormDesign, type FormDesign } from '../domain/formDesign'
 
-export function ChoiceForm({ clusters, design = defaultFormDesign, preferences, onChange, onSubmit, disabled = false, submitDisabled = false, preview = false }: {
+export function ChoiceForm({ clusters, design = defaultFormDesign, preferences, onChange, onSubmit, onOpenDocument, disabled = false, submitDisabled = false, preview = false }: {
   clusters: ClusterSnapshot[]; design?: FormDesign; preferences: ClusterPreference[];
-  onChange: (value: ClusterPreference[]) => void; onSubmit: () => void; disabled?: boolean; submitDisabled?: boolean; preview?: boolean;
+  onChange: (value: ClusterPreference[]) => void; onSubmit: () => void; onOpenDocument?: () => void; disabled?: boolean; submitDisabled?: boolean; preview?: boolean;
 }) {
   const form = { ...defaultFormDesign, ...design }
+  const documentAvailable = form.documentLinkVisible && Boolean(form.documentUrl || (form.documentStoragePath && onOpenDocument))
+  const documentLink = form.documentUrl
+    ? <a href={form.documentUrl} target="_blank" rel="noopener noreferrer">תקצירי הקורסים</a>
+    : <button type="button" className="inline-document-link" onClick={onOpenDocument}>תקצירי הקורסים</button>
+  const introLinkLabel = 'תקצירי הקורסים'
+  const introduction = !documentAvailable && form.introduction === defaultFormDesign.introduction
+    ? form.introduction.replace('לפני שתתחילו לבחור, קראו בעיון את תקצירי הקורסים.\n\n', '')
+    : form.introduction
+  const introLinkIndex = introduction.indexOf(introLinkLabel)
   function update(id: string, patch: Partial<ClusterPreference>) { onChange(preferences.map(p => p.clusterId === id ? { ...p, ...patch } : p)) }
   return <form className={`choice-form theme-${form.theme} layout-${form.layout}`} onSubmit={event => { event.preventDefault(); onSubmit() }}>
     <header className="choice-form-header">
       {form.coverUrl && <img className="form-cover" src={form.coverUrl} alt="" />}
-      <h2>{form.title}</h2>{form.introduction && <p className="formatted-text">{form.introduction}</p>}
-      {form.documentUrl && form.documentLinkVisible && <a href={form.documentUrl} target="_blank" rel="noopener noreferrer">מסמך התכנים המלא ↗</a>}
+      <h2>{form.title}</h2>{introduction && <p className="formatted-text">{documentAvailable && introLinkIndex >= 0 ? <>{introduction.slice(0,introLinkIndex)}{documentLink}{introduction.slice(introLinkIndex+introLinkLabel.length)}</> : introduction}</p>}
+      {documentAvailable && introLinkIndex < 0 && documentLink}
       {form.instructions && <p className="formatted-text">{form.instructions}</p>}
     </header>
     <fieldset className="workspace-boundary" disabled={disabled}><div className="choice-clusters">{clusters.map(cluster => {

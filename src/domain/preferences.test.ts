@@ -44,6 +44,14 @@ describe('preference submission validation', () => {
   it('rejects submission when the choice window is closed', () => {
     expect(validatePreferenceSubmission(validSubmission(), { ...cycle, status: 'choice_closed' }).map((issue) => issue.code)).toContain('submission.choice_not_open')
   })
+
+  it('accepts a submission before the deadline and rejects it at the deadline', () => {
+    const withDeadline={...cycle,choiceDeadlineEnabled:true,choiceClosesAt:'2026-08-28T09:01:00.000Z'}
+    expect(validatePreferenceSubmission(validSubmission(),withDeadline)).toEqual([])
+    const late=validSubmission();late.submittedAt=withDeadline.choiceClosesAt
+    expect(validatePreferenceSubmission(late,withDeadline).map(issue=>issue.code)).toContain('submission.choice_not_open')
+    expect(validatePreferenceSubmission(late,{...withDeadline,choiceDeadlineEnabled:undefined})).toEqual([])
+  })
 })
 
 it('enforces a coordinator-required rationale only on final submission',()=>{

@@ -9,6 +9,7 @@ export interface AssignmentCycle extends VersionedEntity {
   status: CycleStatus
   choiceOpensAt?: string
   choiceClosesAt?: string
+  choiceDeadlineEnabled?: boolean
   publishedAt?: string
   appealWindowSchoolDays: number
   rulesVersion: string

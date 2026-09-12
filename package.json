@@ -15,7 +15,7 @@
     "functions:build": "pnpm --dir functions build",
     "server:typecheck": "tsc -p tsconfig.server.json",
     "test:emulator": "firebase emulators:exec --only firestore --project demo-nativ-local \"pnpm vitest run --config vitest.emulator.config.ts\"",
-    "test:system": "pnpm functions:build && firebase emulators:exec --only auth,firestore,functions --project demo-nativ-local \"pnpm vitest run --config vitest.system.config.ts\"",
+    "test:system": "pnpm functions:build && firebase emulators:exec --only auth,firestore,functions,storage --project demo-nativ-local \"pnpm vitest run --config vitest.system.config.ts\"",
     "emulators": "pnpm functions:build && firebase emulators:start --project demo-nativ-local"
   },
   "dependencies": {

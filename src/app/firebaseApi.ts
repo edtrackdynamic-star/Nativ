@@ -69,13 +69,34 @@ export interface CycleCatalogData { catalog: import('../domain/catalog').CycleCa
 export async function getCycleCatalog(cycleId: string): Promise<CycleCatalogData> {
   return (await httpsCallable<{cycleId: string}, CycleCatalogData>(functionsClient(), 'getCycleCatalog')({cycleId})).data
 }
+
+export async function setChoiceDeadline(cycleId: string, expectedVersion: number, choiceClosesAt: string | null): Promise<AssignmentCycle> {
+  return (await httpsCallable<Record<string, unknown>, AssignmentCycle>(functionsClient(), 'setChoiceDeadline')({ cycleId, expectedVersion, choiceClosesAt })).data
+}
 export interface ExtractedDescriptionResult { sourceCourseName: string; sourceTeacherName: string; description: string; proposedCourseId: string; match: 'clear' | 'review' }
-export type DescriptionSource = { kind: 'google_docs'; url: string } | { kind: 'docx'; fileName: string; base64: string }
+export type DescriptionSource = { kind: 'google_docs'; url: string } | { kind: 'stored_docx'; cycleId: string; path: string }
+export async function uploadCycleDocument(cycleId: string, file: File): Promise<{path:string;fileName:string}> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
+  return (await httpsCallable<Record<string, unknown>, {path:string;fileName:string}>(functionsClient(), 'uploadCycleDocument', { timeout: 120000 })({ cycleId, fileName: file.name, base64: btoa(binary) })).data
+}
+export async function downloadCycleDocument(cycleId: string, previewPath?: string): Promise<void> {
+  const result = (await httpsCallable<Record<string, unknown>, {base64:string;fileName:string}>(functionsClient(), 'downloadCycleDocument', { timeout: 120000 })({ cycleId, ...(previewPath ? { previewPath } : {}) })).data
+  const binary = atob(result.base64)
+  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0))
+  const url = URL.createObjectURL(new Blob([bytes], {type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = result.fileName
+  link.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000)
+}
 export async function extractCourseDescriptions(source: DescriptionSource, candidates: Array<{id:string;label:string;instructorNames:string[]}>): Promise<{results:ExtractedDescriptionResult[];readerEmail:string}> {
   return (await httpsCallable<Record<string, unknown>, {results:ExtractedDescriptionResult[];readerEmail:string}>(functionsClient(), 'extractCourseDescriptions', {timeout:180000})({...source,candidates})).data
 }
 
-export interface InstructorWorkspaceData { cycle: { schoolYear: string; termLabel: string; status: CycleStatus }; courses: Array<{ id: string; label: string; description: string; subjectArea: string; students: string[] }> }
+export interface InstructorWorkspaceData { cycle: { schoolYear: string; termLabel: string; status: CycleStatus }; documentUrl?: string; hasWordDocument?: boolean; courses: Array<{ id: string; label: string; description: string; subjectArea: string; students: string[] }> }
 export async function getInstructorWorkspace(cycleId: string): Promise<InstructorWorkspaceData> {
   return (await httpsCallable<{ cycleId: string }, InstructorWorkspaceData>(functionsClient(), 'getInstructorWorkspace')({ cycleId })).data
 }

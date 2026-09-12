@@ -81,6 +81,14 @@ describe('NativCommandService cycle commands', () => {
 })
 
 describe('NativCommandService preference commands', () => {
+  it('blocks a draft after the deadline and accepts it again when the deadline is extended', async () => {
+    const closed={...demoCycle,choiceDeadlineEnabled:true,choiceClosesAt:'2026-08-28T08:00:00.000Z'}
+    const input={organizationId:demoCycle.organizationId,cycleId:demoCycle.id,studentId:student.uid,draft:createDraft(),expectedVersion:0,occurredAt:'2026-08-28T09:00:00.000Z',idempotencyKey:'deadline-draft',auditEventId:'deadline-audit'}
+    const blocked=new NativCommandService(new InMemoryNativRepository({cycles:[closed],catalogSnapshots:[demoCatalogSnapshot]}))
+    await expect(blocked.saveDraft(student,input)).rejects.toThrow(DomainValidationError)
+    const extended=new NativCommandService(new InMemoryNativRepository({cycles:[{...closed,choiceClosesAt:'2026-08-29T08:00:00.000Z'}],catalogSnapshots:[demoCatalogSnapshot]}))
+    await expect(extended.saveDraft(student,input)).resolves.toMatchObject({status:'draft'})
+  })
   it('saves an incomplete draft for the student and records an audit event', async () => {
     const repository = new InMemoryNativRepository({ cycles: [demoCycle], catalogSnapshots: [demoCatalogSnapshot] })
     const service = new NativCommandService(repository)

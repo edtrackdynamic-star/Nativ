@@ -1,6 +1,7 @@
 import { isCurrentYearWindow } from '../../src/domain/schoolYear'
 import { eligibleClasses } from './classDirectory'
 import { parseFormDesign, safeLink } from '../../src/domain/formDesign'
+import { isValidChoiceDeadline } from '../../src/domain/choiceDeadline'
 import { randomUUID } from 'node:crypto'
 import { getAuth } from 'firebase-admin/auth'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
@@ -16,6 +17,7 @@ import { FirestoreNativRepository } from '../../server/firestore/FirestoreNativR
 import { catalogSnapshotDocumentPath, courseCatalogDocumentPath, cycleDocumentPath, workflowDocumentPath } from '../../server/firestore/paths'
 import { callableOptions, coreFirestore, nativFirestore as firestore } from './firebase'
 import { actorFromRequest, inputRecord, requiredInteger, requiredString } from './request'
+import { verifyStoredCycleDocument } from './courseDescriptionImport'
 
 const service = new NativCommandService(new FirestoreNativRepository(firestore))
 
@@ -23,7 +25,7 @@ export { rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAssignm
 export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
 export { deliverNativMail } from './mailDelivery'
 export { getStudentRoster } from './studentRoster'
-export { extractCourseDescriptions } from './courseDescriptionImport'
+export { downloadCycleDocument, extractCourseDescriptions, uploadCycleDocument } from './courseDescriptionImport'
 
 function mapError(error: unknown): never {
   if (error instanceof HttpsError) throw error
@@ -85,6 +87,31 @@ export const createCycle = onCall(callableOptions, async (request) => {
   return cycle
 })
 
+export const setChoiceDeadline = onCall(callableOptions, async (request) => {
+  const actor = await actorFromRequest(request)
+  if (!actor.capabilities.includes('nativ.assignment.manage')) throw new HttpsError('permission-denied', 'אין הרשאה לשנות את מועד ההגשה')
+  const data = inputRecord(request.data)
+  const cycleId = requiredString(data, 'cycleId')
+  const expectedVersion = requiredInteger(data, 'expectedVersion')
+  const deadline = data.choiceClosesAt
+  if (deadline !== null && (typeof deadline !== 'string' || !isValidChoiceDeadline(deadline))) throw new HttpsError('invalid-argument', 'מועד הסגירה אינו תקין')
+  const now = new Date().toISOString()
+  if (deadline && deadline <= now) throw new HttpsError('invalid-argument', 'יש לבחור מועד סגירה עתידי')
+  return firestore.runTransaction(async transaction => {
+    const reference = firestore.doc(cycleDocumentPath(actor.organizationId, cycleId))
+    const snapshot = await transaction.get(reference)
+    const cycle = snapshot.data() as AssignmentCycle | undefined
+    if (!cycle) throw new HttpsError('not-found', 'התהליך לא נמצא')
+    if (cycle.version !== expectedVersion) throw new HttpsError('aborted', 'התהליך השתנה. רעננו לפני שינוי המועד.')
+    if (!['draft', 'choice_open'].includes(cycle.status)) throw new HttpsError('failed-precondition', 'אפשר לשנות את המועד רק לפני סיום שלב הבחירה')
+    const updated: AssignmentCycle = { ...cycle, choiceDeadlineEnabled: Boolean(deadline), ...(deadline ? { choiceClosesAt: deadline } : {}), version: cycle.version + 1, updatedAt: now, updatedBy: actor.uid }
+    if (!deadline) delete updated.choiceClosesAt
+    transaction.set(reference, updated)
+    transaction.create(firestore.collection(`organizations/${actor.organizationId}/nativAuditEvents`).doc(), { id: randomUUID(), organizationId: actor.organizationId, actorId: actor.uid, occurredAt: now, action: 'cycle.choice_deadline.updated', entityType: 'AssignmentCycle', entityId: cycleId, reason: deadline ? `מועד הגשה: ${deadline}` : 'בוטל מועד ההגשה', beforeVersion: cycle.version, afterVersion: updated.version })
+    return updated
+  })
+})
+
 interface CatalogCourseInput { capacityLimit?: number; documentUrl?: string; imageUrl?: string; label: string; description?: string; subjectArea?: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: RepeatPolicy }
 interface CatalogClusterInput { capacityFlexibility?: number; eligibleClassIds?: string[]; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass?: boolean; courses: CatalogCourseInput[] }
 
@@ -99,6 +126,8 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
   let formDesign: ReturnType<typeof parseFormDesign>
   try { formDesign = parseFormDesign(data.formDesign); for(const c of clusters) for(const course of c.courses){safeLink(course.documentUrl,true);safeLink(course.imageUrl)} }
   catch(error){throw new HttpsError('invalid-argument',error instanceof Error?error.message:'עיצוב הטופס אינו תקין')}
+  if (formDesign.documentStoragePath && !formDesign.documentStoragePath.startsWith(`organizations/${actor.organizationId}/nativCycles/${cycleId}/source-documents/`)) throw new HttpsError('permission-denied', 'מסמך Word אינו שייך למחזור')
+  if (formDesign.documentStoragePath) await verifyStoredCycleDocument(formDesign.documentStoragePath)
   const availableClasses = new Set((await eligibleClasses(actor.organizationId)).map(c => c.id))
   for (const cluster of clusters) {
     if (cluster.eligibleClassIds !== undefined && (!Array.isArray(cluster.eligibleClassIds) || !cluster.eligibleClassIds.length || cluster.eligibleClassIds.some(id => typeof id !== 'string' || !availableClasses.has(id)))) throw new HttpsError('invalid-argument', 'יש לבחור לפחות כיתה פעילה אחת לכל מקבץ מוגבל, או לבחור בכל הכיתות')
@@ -178,18 +207,22 @@ export const getInstructorWorkspace = onCall(callableOptions, async (request) =>
   const actor = await actorFromRequest(request, 'read')
   if (!actor.roles.includes('course_instructor')) throw new HttpsError('permission-denied', 'המסך זמין למנחי קורסים בלבד')
   const cycleId = requiredString(inputRecord(request.data), 'cycleId')
-  const [cycleSnapshot, catalogSnapshot, workflowSnapshot] = await Promise.all([
+  const [cycleSnapshot, catalogSnapshot, workflowSnapshot, formSnapshot] = await Promise.all([
     firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)).get(),
     firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId)).get(),
     firestore.doc(workflowDocumentPath(actor.organizationId, cycleId)).get(),
+    firestore.doc(catalogSnapshotDocumentPath(actor.organizationId, cycleId)).get(),
   ])
   const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
   if (!cycle) throw new HttpsError('not-found', 'מחזור השיבוץ לא נמצא')
   const courses = ((catalogSnapshot.data()?.courses ?? []) as Course[]).filter((course) => course.instructorIds.includes(actor.uid))
+  const formDesign = (formSnapshot.data() as CycleCatalogSnapshot | undefined)?.formDesign
   const workflow = workflowSnapshot.data() as WorkflowState | undefined
   const publishedAssignments = workflow?.assignmentRun?.publishedAt ? workflow.assignmentRun.assignments : []
   return {
     cycle: { schoolYear: cycle.schoolYear, termLabel: cycle.termLabel, status: cycle.status },
+    documentUrl: courses.length ? formDesign?.documentUrl : undefined,
+    hasWordDocument: Boolean(courses.length && formDesign?.documentStoragePath),
     courses: courses.map((course) => ({ id: course.id, label: course.label, description: course.description, subjectArea: course.subjectArea, students: publishedAssignments.filter((assignment) => assignment.courseId === course.id).map((assignment) => [assignment.studentLabel ?? 'תלמיד', assignment.studentClassLabel].filter(Boolean).join(' · ')) })),
   }
 })

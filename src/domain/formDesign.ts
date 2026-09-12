@@ -1,8 +1,13 @@
 export interface FormDesign {
   title: string; introduction: string; instructions: string; documentUrl: string; coverUrl: string;
-  documentLinkVisible: boolean; theme: 'blue' | 'teal' | 'purple'; layout: 'cards' | 'list'; submitLabel: string;
+  documentStoragePath: string; documentName: string; documentLinkVisible: boolean; theme: 'blue' | 'teal' | 'purple'; layout: 'cards' | 'list'; submitLabel: string;
 }
-export const defaultFormDesign: FormDesign = { title: 'טופס הבחירה שלי', introduction: '', instructions: 'קראו על הקורסים ודרגו את ההעדפות שלכם בכל מקבץ.', documentUrl: '', documentLinkVisible: false, coverUrl: '', theme: 'blue', layout: 'cards', submitLabel: 'הגשת הבחירות' }
+export const defaultFormDesign: FormDesign = { title: 'טופס הבחירה שלי', introduction: 'לפני שתתחילו לבחור, קראו בעיון את תקצירי הקורסים.\n\nבכל מקבץ דרגו את מספר הקורסים המבוקש, החל מהקורס המועדף עליכם ביותר (דירוג 1). הדירוג עוזר לנו להתחשב בהעדפות שלכם ככל האפשר, גם כשיש ביקוש רב לקורס מסוים.\n\nהוסיפו לכל מקבץ הסבר קצר של 2–3 משפטים: מה מסקרן אתכם בקורס, ומה הייתם רוצים ללמוד בו? כאשר הביקוש לקורס עולה על מספר המקומות, תינתן עדיפות להעדפות המלוות בהסבר אישי ומנומק, לצד דירוג ההעדפות ושאר שיקולי השיבוץ.', instructions: '', documentUrl: '', documentStoragePath: '', documentName: '', documentLinkVisible: false, coverUrl: '', theme: 'blue', layout: 'cards', submitLabel: 'הגשת הבחירות' }
+export function safeCycleDocumentPath(value: unknown): string {
+  if (!value) return ''
+  if (typeof value !== 'string' || !/^organizations\/[a-z0-9][a-z0-9-]{2,64}\/nativCycles\/cycle-[a-f0-9-]+\/source-documents\/[a-f0-9-]+\.docx$/u.test(value)) throw new Error('מסמך Word אינו תקין')
+  return value
+}
 export function safeLink(value: unknown, docsOnly = false): string {
   if (!value) return ''
   if (typeof value !== 'string' || value.length > 2048) throw new Error('הקישור אינו תקין')
@@ -22,5 +27,8 @@ export function parseFormDesign(value: unknown): FormDesign {
   if (data.theme && !['blue','teal','purple'].includes(data.theme)) throw new Error('יש לבחור צבע מתוך האפשרויות')
   if (data.layout && !['cards','list'].includes(data.layout)) throw new Error('יש לבחור פריסה תקינה')
   if (data.documentLinkVisible !== undefined && typeof data.documentLinkVisible !== 'boolean') throw new Error('יש לבחור אם להציג את קישור המסמך')
-  return { title: text('title',150) || defaultFormDesign.title, introduction: text('introduction',4000), instructions: text('instructions',2000), documentUrl: safeLink(data.documentUrl,true), documentLinkVisible: data.documentLinkVisible ?? Boolean(data.documentUrl), coverUrl: safeLink(data.coverUrl), theme: data.theme ?? 'blue', layout: data.layout ?? 'cards', submitLabel: text('submitLabel',60) || defaultFormDesign.submitLabel }
+  const documentUrl = safeLink(data.documentUrl,true)
+  const documentStoragePath = safeCycleDocumentPath(data.documentStoragePath)
+  if (documentUrl && documentStoragePath) throw new Error('יש לבחור מסמך מקור אחד בלבד')
+  return { title: text('title',150) || defaultFormDesign.title, introduction: text('introduction',4000), instructions: text('instructions',2000), documentUrl, documentStoragePath, documentName: text('documentName',200), documentLinkVisible: data.documentLinkVisible ?? Boolean(documentUrl || documentStoragePath), coverUrl: safeLink(data.coverUrl), theme: data.theme ?? 'blue', layout: data.layout ?? 'cards', submitLabel: text('submitLabel',60) || defaultFormDesign.submitLabel }
 }

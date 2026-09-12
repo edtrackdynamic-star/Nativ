@@ -2,6 +2,7 @@ import { includesClass } from '../domain/classEligibility'
 import type { ActorContext } from '../domain/access'
 import type { CycleCatalogSnapshot } from '../domain/catalog'
 import { transitionCycle as applyCycleTransition, type AssignmentCycle, type CycleStatus } from '../domain/cycle'
+import { choiceAcceptsResponses } from '../domain/choiceDeadline'
 import { validatePreferenceSubmission, type PreferenceSubmission } from '../domain/preferences'
 import { DomainValidationError, type AuditEvent } from '../domain/types'
 import { assertCapability, assertOrganizationScope, assertStudentSelfOrManager } from './authorization'
@@ -81,6 +82,8 @@ export class NativCommandService {
         ? {
             ...catalog.formDesign,
             documentUrl: catalog.formDesign.documentLinkVisible ? catalog.formDesign.documentUrl : '',
+            documentStoragePath: catalog.formDesign.documentLinkVisible ? catalog.formDesign.documentStoragePath : '',
+            documentName: catalog.formDesign.documentLinkVisible ? catalog.formDesign.documentName : '',
           }
         : undefined
       return {
@@ -117,6 +120,7 @@ export class NativCommandService {
     return this.executeIdempotently(input.organizationId, input.idempotencyKey, fingerprint('transitionCycle', input), input.occurredAt, async (transaction) => {
       const current = await requireCycle(transaction, input.organizationId, input.cycleId)
       if (current.status === 'draft' && input.to === 'choice_open') {
+        if (current.choiceDeadlineEnabled && current.choiceClosesAt && current.choiceClosesAt <= input.occurredAt) throw new DomainValidationError([{ code: 'cycle.choice_deadline_passed', message: 'מועד ההגשה חלף. יש לקבוע מועד חדש לפני פתיחת הבחירה.', severity: 'error' }])
         const catalog = await transaction.getCatalogSnapshot(input.organizationId, input.cycleId)
         if (!catalog?.clusters.length || catalog.clusters.some((cluster) => !cluster.courses.length || cluster.requiredRankingCount > cluster.courses.length)) throw new DomainValidationError([{ code: 'cycle.catalog_required', message: 'יש להשלים מקבצים וקורסים לפני פתיחת הבחירה', path: 'catalog', severity: 'error' }])
       }
@@ -140,8 +144,8 @@ export class NativCommandService {
     if (actor.uid === input.studentId && !actor.roles.includes('student')) throw new AuthorizationError()
     return this.executeIdempotently(input.organizationId, input.idempotencyKey, fingerprint('saveDraft', input), input.occurredAt, async (transaction) => {
       const cycle = await requireCycle(transaction, input.organizationId, input.cycleId)
-      if (cycle.status !== 'choice_open') {
-        throw new DomainValidationError([{ code: 'draft.choice_not_open', message: 'ניתן לשמור טיוטה רק כאשר הבחירה פתוחה', severity: 'error' }])
+      if (!choiceAcceptsResponses(cycle, input.occurredAt)) {
+        throw new DomainValidationError([{ code: 'draft.choice_not_open', message: 'מועד הגשת הבחירות הסתיים או שתקופת הבחירה סגורה', severity: 'error' }])
       }
       if (input.draft.organizationId !== input.organizationId || input.draft.cycleId !== input.cycleId || input.draft.studentId !== input.studentId) {
         throw new DomainValidationError([{ code: 'draft.scope_mismatch', message: 'הטיוטה אינה תואמת לארגון, למחזור או לתלמיד', severity: 'error' }])

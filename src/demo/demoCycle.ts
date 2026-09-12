@@ -15,7 +15,6 @@ export const demoCycle: AssignmentCycle = {
   termLabel: 'מחצית א׳',
   status: 'choice_open',
   choiceOpensAt: '2026-08-27T08:00:00Z',
-  choiceClosesAt: '2026-09-03T20:00:00Z',
   appealWindowSchoolDays: 5,
   rulesVersion: '1.0.0',
 }

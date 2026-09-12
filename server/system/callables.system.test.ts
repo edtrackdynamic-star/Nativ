@@ -11,6 +11,7 @@ import type { WorkflowState } from '../../src/domain/workflow'
 import { demoCatalogSnapshot, demoCourses, demoCycle, demoSubmission } from '../../src/demo/demoCycle'
 import { initializeApp as initializeAdminApp, deleteApp as deleteAdminApp } from 'firebase-admin/app'
 import { getFirestore } from 'firebase-admin/firestore'
+import { readFileSync } from 'node:fs'
 
 interface SeedResult {
   cycleId: string
@@ -93,6 +94,8 @@ describe('Nativ callable system flow', () => {
     })).rejects.toMatchObject({ code: 'functions/permission-denied' })
     const extractDescriptions = httpsCallable<Record<string, unknown>, unknown>(functions, 'extractCourseDescriptions')
     await expect(extractDescriptions({ kind:'docx',fileName:'courses.docx',base64:'AA==',candidates:[{id:'0-0',label:'קורס',instructorNames:[]}] })).rejects.toMatchObject({ code:'functions/permission-denied' })
+    await expect(httpsCallable<Record<string,unknown>,unknown>(functions,'setChoiceDeadline')({cycleId:demoCycle.id,expectedVersion:1,choiceClosesAt:new Date(Date.now()+60000).toISOString()})).rejects.toMatchObject({code:'functions/permission-denied'})
+    await expect(httpsCallable<Record<string,unknown>,unknown>(functions,'uploadCycleDocument')({cycleId:demoCycle.id,fileName:'courses.docx',base64:'UEs='})).rejects.toMatchObject({code:'functions/permission-denied'})
     const listRuns = httpsCallable<{cycleId:string},unknown[]>(functions,'listAssignmentRuns')
     await expect(listRuns({cycleId:demoCycle.id})).rejects.toMatchObject({code:'functions/permission-denied'})
 
@@ -274,16 +277,23 @@ describe('Nativ callable system flow', () => {
     const createCycle = httpsCallable<Record<string, unknown>, AssignmentCycle>(functions, 'createCycle')
     const created = (await createCycle({ schoolYear: schoolYearId(currentSchoolYearStart()+1), termLabel: 'מחצית א׳' })).data
     expect(created).toMatchObject({ status: 'draft', version: 1 })
+    const wordBase64=readFileSync(new URL('./fixtures/course-summaries.base64',import.meta.url),'utf8')
+    const uploadWord=httpsCallable<Record<string,unknown>,{path:string;fileName:string}>(functions,'uploadCycleDocument')
+    const uploaded=(await uploadWord({cycleId:created.id,fileName:'תקצירי הקורסים.docx',base64:wordBase64})).data
+    expect(uploaded.path).toContain(`/${created.id}/source-documents/`)
 
     const listInstructors = httpsCallable<undefined, Array<{ uid: string; displayName: string }>>(functions, 'listEligibleInstructors')
     const instructors = (await listInstructors()).data
     expect(instructors.length).toBeGreaterThan(0)
+    const instructorAccount=accounts.find(account=>account.label==='מנחה קורס')!
+    const instructorUid=(await getAdminAuth(adminApp).getUserByEmail(instructorAccount.email)).uid
+    expect(instructors.some(entry=>entry.uid===instructorUid)).toBe(true)
 
     const saveCatalog = httpsCallable<Record<string, unknown>, { id: string }>(functions, 'saveCycleCatalog')
     await saveCatalog({
       cycleId: created.id,
       expectedVersion:created.version,
-      formDesign:{title:'בוחרים ביחד',theme:'teal',layout:'list'},
+      formDesign:{title:'בוחרים ביחד',theme:'teal',layout:'list',documentStoragePath:uploaded.path,documentName:uploaded.fileName,documentLinkVisible:true},
       clusters: [{
         label: 'אמנויות', capacityFlexibility: 4,
         description:'בחרו את הקורס המועדף',rationaleMode:'required',
@@ -292,7 +302,7 @@ describe('Nativ callable system flow', () => {
           label: 'תיאטרון',
           description: 'סדנת תיאטרון',documentUrl:'https://docs.google.com/document/d/test-document/edit',
           subjectArea: 'אמנויות',
-          instructorIds: [instructors[0].uid],
+          instructorIds: [instructorUid],
           minimum: 0,
           target: 18,
           maximum: 22, capacityLimit: 22,
@@ -306,6 +316,8 @@ describe('Nativ callable system flow', () => {
     expect(catalog.catalog.clusters).toHaveLength(1)
     expect(catalog.catalog.clusters[0]).toMatchObject({ balanceByClass: false,rationaleMode:'required',description:'בחרו את הקורס המועדף' })
     expect(catalog.catalog).toMatchObject({formDesign:{title:'בוחרים ביחד',theme:'teal'}})
+    const downloadWord=httpsCallable<Record<string,unknown>,{base64:string;fileName:string}>(functions,'downloadCycleDocument')
+    expect((await downloadWord({cycleId:created.id})).data.base64).toBe(wordBase64)
     expect(catalog.courses).toHaveLength(1)
     expect(catalog.courses[0]).toMatchObject({capacity:{limit:22,maximum:22}})
     expect(catalog.catalog.clusters[0]).toMatchObject({capacityFlexibility:4})
@@ -319,7 +331,15 @@ describe('Nativ callable system flow', () => {
     const transition = httpsCallable<Record<string, unknown>, AssignmentCycle>(functions, 'transitionCycle')
     await expect(saveCatalog({cycleId:created.id,expectedVersion:0,clusters:[{label:'x',requiredRankingCount:1,courses:[{label:'x',instructorIds:[instructors[0].uid],minimum:0,target:1,maximum:2,repeatPolicy:'allowed'}]}]})).rejects.toMatchObject({code:'functions/aborted'})
     const opened = (await transition({ cycleId: created.id, expectedVersion: configured.version, to: 'choice_open', reason: 'פתיחת בדיקת מערכת', idempotencyKey: 'system-open-new-cycle' })).data
-    await transition({ cycleId: created.id, expectedVersion: opened.version, to: 'choice_closed', reason: 'סיום בחירה ללא הגשות', idempotencyKey: 'system-close-empty-cycle' })
+    const setDeadline = httpsCallable<Record<string,unknown>, AssignmentCycle>(functions,'setChoiceDeadline')
+    const firstDeadline = new Date(Date.now()+120000).toISOString()
+    const timed = (await setDeadline({cycleId:created.id,expectedVersion:opened.version,choiceClosesAt:firstDeadline})).data
+    expect(timed.choiceClosesAt).toBe(firstDeadline)
+    expect(timed.choiceDeadlineEnabled).toBe(true)
+    await expect(setDeadline({cycleId:created.id,expectedVersion:opened.version,choiceClosesAt:new Date(Date.now()+180000).toISOString()})).rejects.toMatchObject({code:'functions/aborted'})
+    const extended = (await setDeadline({cycleId:created.id,expectedVersion:timed.version,choiceClosesAt:new Date(Date.now()+240000).toISOString()})).data
+    expect(new Date(extended.choiceClosesAt!).getTime()).toBeGreaterThan(new Date(timed.choiceClosesAt!).getTime())
+    await transition({ cycleId: created.id, expectedVersion: extended.version, to: 'choice_closed', reason: 'סיום בחירה ללא הגשות', idempotencyKey: 'system-close-empty-cycle' })
 
     const generate = httpsCallable<{ cycleId: string }, WorkflowState>(functions, 'generateAiEvaluations')
     await expect(generate({ cycleId: created.id })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
@@ -333,6 +353,13 @@ describe('Nativ callable system flow', () => {
     const getInstructorWorkspace = httpsCallable<{ cycleId: string }, { courses: Array<{ label: string; students: string[] }> }>(functions, 'getInstructorWorkspace')
     const instructorWorkspace = (await getInstructorWorkspace({ cycleId: demoCycle.id })).data
     expect(instructorWorkspace.courses.some((course) => course.label === 'תיאטרון')).toBe(true)
+    const createdInstructorWorkspace=(await getInstructorWorkspace({cycleId:created.id})).data
+    expect(createdInstructorWorkspace.courses.some(course=>course.label==='תיאטרון')).toBe(true)
+    expect((await downloadWord({cycleId:created.id})).data.base64).toBe(wordBase64)
+    await signOut(auth)
+    const studentAccount=accounts.find(account=>account.label==='תלמיד')!
+    await signInWithEmailAndPassword(auth,studentAccount.email,studentAccount.password)
+    expect((await downloadWord({cycleId:created.id})).data.base64).toBe(wordBase64)
   })
   it('enforces per-cluster classes across catalog, draft, submit and assignment', async () => {
     const call = async <T,>(name:string,data:Record<string,unknown>={}) => (await httpsCallable<Record<string,unknown>,T>(functions,name)(data)).data

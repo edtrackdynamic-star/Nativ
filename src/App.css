@@ -309,6 +309,13 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .capacity-planner > label { display: grid; gap: 8px; max-width: 320px; }
 .document-import { border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-block: 14px; background: #fff; }
 .document-import summary { cursor: pointer; font-weight: 800; }
+.document-import h3 { margin-block-start: 0; }
+.inline-document-link { display: inline; padding: 0; border: 0; background: none; color: var(--form-accent, #1b5b94); text-decoration: underline; font: inherit; cursor: pointer; }
+.choice-deadline { padding: 14px 18px; border-radius: 12px; background: #e8f4f8; color: #17445c; font-weight: 700; }
+.choice-deadline.expired { background: #fff0ea; color: #8c2f17; }
+.deadline-settings { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; margin-block: 16px; background: #fff; }
+.deadline-settings label { display: grid; gap: 6px; }
+.deadline-settings p { flex-basis: 100%; margin: 0; }
 .document-import code { direction: ltr; unicode-bidi: isolate; overflow-wrap: anywhere; }
 .description-review { overflow-x: auto; margin-block: 14px; }
 .description-review table { width: 100%; min-width: 760px; border-collapse: collapse; }

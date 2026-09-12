@@ -1,4 +1,5 @@
 import type { AssignmentCycle } from './cycle'
+import { choiceAcceptsResponses } from './choiceDeadline'
 import type { ValidationIssue, VersionedEntity } from './types'
 
 export const submissionStatuses = ['draft', 'submitted'] as const
@@ -55,8 +56,8 @@ export function validatePreferenceSubmission(submission: PreferenceSubmission, c
   if (submission.organizationId !== cycle.organizationId || submission.cycleId !== cycle.id) {
     issues.push({ code: 'submission.cycle_scope_mismatch', message: 'ההגשה אינה שייכת למחזור ולארגון הפעילים', severity: 'error' })
   }
-  if (submission.status === 'submitted' && cycle.status !== 'choice_open') {
-    issues.push({ code: 'submission.choice_not_open', message: 'ניתן להגיש רק כאשר תקופת הבחירה פתוחה', severity: 'error' })
+  if (submission.status === 'submitted' && !choiceAcceptsResponses(cycle, submission.submittedAt ?? submission.updatedAt)) {
+    issues.push({ code: 'submission.choice_not_open', message: 'מועד הגשת הבחירות הסתיים או שתקופת הבחירה סגורה', severity: 'error' })
   }
 
   for (const cluster of submission.catalogSnapshot) {
