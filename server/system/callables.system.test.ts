@@ -329,6 +329,8 @@ describe('Nativ callable system flow', () => {
     expect(instructors.some(entry=>entry.uid===instructorUid)).toBe(true)
 
     const saveCatalog = httpsCallable<Record<string, unknown>, { id: string }>(functions, 'saveCycleCatalog')
+    const sampleCourse = { label: 'קורס לדוגמה', instructorIds: [instructorUid], minimum: 0, target: 18, maximum: 22, repeatPolicy: 'allowed' }
+    await expect(saveCatalog({ cycleId: created.id, expectedVersion: created.version, clusters: [{ label: 'שלושה קורסים', requiredRankingCount: 2, courses: [sampleCourse, { ...sampleCourse, label: 'קורס שני' }, { ...sampleCourse, label: 'קורס שלישי' }] }] })).rejects.toMatchObject({ code: 'functions/invalid-argument' })
     await saveCatalog({
       cycleId: created.id,
       expectedVersion:created.version,

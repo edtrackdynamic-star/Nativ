@@ -7,10 +7,10 @@ function render(schoolLogo?: string) {
 }
 
 describe('ChoiceForm branding and introduction', () => {
-  it('shows the school name when no logo is available and keeps the approved introduction', () => {
+  it('shows the school name and describes the explanation as optional', () => {
     const html = render()
     expect(html).toContain('בית ספר לדוגמה')
-    expect(html).toContain('תינתן עדיפות להעדפות המלוות בהסבר אישי ומנומק')
+    expect(html).toContain('ההסבר הוא רשות')
     expect(html).not.toContain('choice-form-school-logo')
   })
 

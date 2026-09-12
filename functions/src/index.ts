@@ -2,6 +2,7 @@ import { isCurrentYearWindow } from '../../src/domain/schoolYear'
 import { eligibleClasses } from './classDirectory'
 import { parseFormDesign, safeLink } from '../../src/domain/formDesign'
 import { isValidChoiceDeadline } from '../../src/domain/choiceDeadline'
+import { validRankingCount } from '../../src/domain/rankingPolicy'
 import { randomUUID } from 'node:crypto'
 import { getAuth } from 'firebase-admin/auth'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
@@ -147,7 +148,7 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
   const courses: Course[] = []
   const catalogClusters = clusters.map((cluster, clusterIndex) => {
     const label = typeof cluster.label === 'string' ? cluster.label.trim() : ''
-    if (!label || !Number.isInteger(cluster.requiredRankingCount) || cluster.requiredRankingCount<1 || !Array.isArray(cluster.courses) || cluster.courses.length < cluster.requiredRankingCount) throw new HttpsError('invalid-argument', 'יש להשלים את שם המקבץ ומספר הקורסים לדירוג')
+    if (!label || !Array.isArray(cluster.courses) || !validRankingCount(cluster.courses.length,cluster.requiredRankingCount)) throw new HttpsError('invalid-argument', 'מספר הקורסים לדירוג חייב להיות לפחות שלושה, או כל הקורסים במקבץ שיש בו פחות משלושה')
     const clusterId = `cluster-${randomUUID()}`
     if (cluster.capacityFlexibility !== undefined && (!Number.isSafeInteger(cluster.capacityFlexibility) || cluster.capacityFlexibility < 0)) throw new HttpsError('invalid-argument', 'גמישות הקיבולת אינה תקינה')
     const snapshotCourses = cluster.courses.map((course) => {

@@ -32,6 +32,17 @@ function createDraft() {
 }
 
 describe('NativCommandService cycle commands', () => {
+  it('does not open an older draft with fewer than three rankings among three courses', async () => {
+    const draftCycle = { ...demoCycle, status: 'draft' as const }
+    const catalog = structuredClone(demoCatalogSnapshot)
+    catalog.clusters[0].requiredRankingCount = 2
+    const service = new NativCommandService(new InMemoryNativRepository({ cycles: [draftCycle], catalogSnapshots: [catalog] }))
+    await expect(service.transitionCycle(coordinator, {
+      organizationId: demoCycle.organizationId, cycleId: demoCycle.id, expectedVersion: draftCycle.version,
+      to: 'choice_open', reason: 'פתיחת הבחירה', occurredAt: '2026-08-28T12:00:00Z', idempotencyKey: 'invalid-ranks-open', auditEventId: 'invalid-ranks-open-audit',
+    })).rejects.toThrow(DomainValidationError)
+  })
+
   it('performs an authorized transition once and reuses an idempotent result', async () => {
     const repository = new InMemoryNativRepository({ cycles: [demoCycle], catalogSnapshots: [demoCatalogSnapshot] })
     const service = new NativCommandService(repository)

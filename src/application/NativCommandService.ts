@@ -3,6 +3,7 @@ import type { ActorContext } from '../domain/access'
 import type { CycleCatalogSnapshot } from '../domain/catalog'
 import { transitionCycle as applyCycleTransition, type AssignmentCycle, type CycleStatus } from '../domain/cycle'
 import { choiceAcceptsResponses } from '../domain/choiceDeadline'
+import { validRankingCount } from '../domain/rankingPolicy'
 import { validatePreferenceSubmission, type PreferenceSubmission } from '../domain/preferences'
 import { DomainValidationError, type AuditEvent } from '../domain/types'
 import { assertCapability, assertOrganizationScope, assertStudentSelfOrManager } from './authorization'
@@ -122,7 +123,7 @@ export class NativCommandService {
       if (current.status === 'draft' && input.to === 'choice_open') {
         if (current.choiceDeadlineEnabled && current.choiceClosesAt && current.choiceClosesAt <= input.occurredAt) throw new DomainValidationError([{ code: 'cycle.choice_deadline_passed', message: 'מועד ההגשה חלף. יש לקבוע מועד חדש לפני פתיחת הבחירה.', severity: 'error' }])
         const catalog = await transaction.getCatalogSnapshot(input.organizationId, input.cycleId)
-        if (!catalog?.clusters.length || catalog.clusters.some((cluster) => !cluster.courses.length || cluster.requiredRankingCount > cluster.courses.length)) throw new DomainValidationError([{ code: 'cycle.catalog_required', message: 'יש להשלים מקבצים וקורסים לפני פתיחת הבחירה', path: 'catalog', severity: 'error' }])
+        if (!catalog?.clusters.length || catalog.clusters.some((cluster) => !validRankingCount(cluster.courses.length,cluster.requiredRankingCount))) throw new DomainValidationError([{ code: 'cycle.catalog_required', message: 'יש להשלים מקבצים ומספר דירוגים תקין לפני פתיחת הבחירה', path: 'catalog', severity: 'error' }])
       }
       const result = applyCycleTransition(current, {
         expectedVersion: input.expectedVersion,
