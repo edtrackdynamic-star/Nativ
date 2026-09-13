@@ -2,6 +2,7 @@ import { isCurrentYearWindow } from '../../src/domain/schoolYear'
 import { eligibleClasses } from './classDirectory'
 import { parseFormDesign, safeLink } from '../../src/domain/formDesign'
 import { isValidChoiceDeadline } from '../../src/domain/choiceDeadline'
+import { parseWeeklySlot } from '../../src/domain/weeklySlot'
 import { validRankingCount } from '../../src/domain/rankingPolicy'
 import { randomUUID } from 'node:crypto'
 import { getAuth } from 'firebase-admin/auth'
@@ -20,10 +21,11 @@ import { callableOptions, coreFirestore, nativFirestore as firestore } from './f
 import { actorFromRequest, inputRecord, requiredInteger, requiredString } from './request'
 import { verifyStoredCycleDocument } from './courseDescriptionImport'
 import { syncInstructorAccess } from './instructorAccess'
+import { operationalError } from './operationalIncidents'
 
 const service = new NativCommandService(new FirestoreNativRepository(firestore))
 
-export { changeStudentAssignment, rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAiEvaluations, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, listAssignmentRuns, publishAssignments, recommendAppeal, runAssignment, selectAssignmentRun, submitAppeal } from './workflowCallables'
+export { changeStudentAssignment, rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAiEvaluations, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, listAssignmentRuns, publishAssignments, recommendAppeal, runAssignment, saveManualProposedAssignment, selectAssignmentRun, submitAppeal } from './workflowCallables'
 export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
 export { deliverNativMail } from './mailDelivery'
 export { getStudentRoster } from './studentRoster'
@@ -114,8 +116,35 @@ export const setChoiceDeadline = onCall(callableOptions, async (request) => {
   })
 })
 
+export const setAppealDeadline = onCall(callableOptions, async request => {
+  try {
+  const actor = await actorFromRequest(request)
+  if (!actor.capabilities.includes('nativ.assignment.manage')) throw new HttpsError('permission-denied', 'אין הרשאה לשנות את מועד הערעורים')
+  const data = inputRecord(request.data)
+  const cycleId = requiredString(data, 'cycleId')
+  const expectedVersion = requiredInteger(data, 'expectedVersion')
+  const deadline = data.appealClosesAt
+  if (deadline !== null && (typeof deadline !== 'string' || !isValidChoiceDeadline(deadline))) throw new HttpsError('invalid-argument', 'מועד סגירת הערעורים אינו תקין')
+  const now = new Date().toISOString()
+  if (deadline && deadline <= now) throw new HttpsError('invalid-argument', 'יש לבחור מועד עתידי, גם אם המועד הקודם כבר חלף')
+  return firestore.runTransaction(async transaction => {
+    const reference = firestore.doc(cycleDocumentPath(actor.organizationId, cycleId))
+    const snapshot = await transaction.get(reference)
+    const cycle = snapshot.data() as AssignmentCycle | undefined
+    if (!cycle) throw new HttpsError('not-found', 'המחזור לא נמצא')
+    if (cycle.version !== expectedVersion) throw new HttpsError('aborted', 'המחזור השתנה. רעננו לפני שינוי מועד הערעורים.')
+    if (!['published', 'appeals'].includes(cycle.status)) throw new HttpsError('failed-precondition', 'אפשר לקבוע מועד ערעורים רק לאחר פרסום השיבוץ ולפני סגירת המחזור')
+    const updated: AssignmentCycle = { ...cycle, appealDeadlineEnabled: Boolean(deadline), ...(deadline ? { appealClosesAt: deadline } : {}), version: cycle.version + 1, updatedAt: now, updatedBy: actor.uid }
+    if (!deadline) delete updated.appealClosesAt
+    transaction.set(reference, updated)
+    transaction.create(firestore.collection(`organizations/${actor.organizationId}/nativAuditEvents`).doc(), { id: randomUUID(), organizationId: actor.organizationId, actorId: actor.uid, occurredAt: now, action: 'cycle.appeal_deadline.updated', entityType: 'AssignmentCycle', entityId: cycleId, reason: deadline ? `מועד ערעורים: ${deadline}` : 'בוטל מועד הערעורים', beforeVersion: cycle.version, afterVersion: updated.version })
+    return updated
+  })
+  } catch (error) { return operationalError(String(request.auth?.token.organizationId ?? ''), 'set_appeal_deadline', error) }
+})
+
 interface CatalogCourseInput { capacityLimit?: number; documentUrl?: string; imageUrl?: string; label: string; description?: string; subjectArea?: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: RepeatPolicy }
-interface CatalogClusterInput { capacityFlexibility?: number; eligibleClassIds?: string[]; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass?: boolean; courses: CatalogCourseInput[] }
+interface CatalogClusterInput { capacityFlexibility?: number; eligibleClassIds?: string[]; weeklySlot?: import('../../src/domain/weeklySlot').WeeklySlot; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass?: boolean; courses: CatalogCourseInput[] }
 
 export const saveCycleCatalog = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request)
@@ -163,7 +192,9 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
       return { courseId, logicalCourseId: courseId, label: courseLabel, description:String(course.description??'').trim().slice(0,4000), documentUrl:safeLink(course.documentUrl,true), imageUrl:safeLink(course.imageUrl), instructorNames:instructorIds.map(id=>teachers.get(id)!) }
     })
     if(cluster.rationaleMode && !['optional','required','hidden'].includes(cluster.rationaleMode))throw new HttpsError('invalid-argument','מצב שדה ההסבר אינו תקין')
-    return { clusterId, ...(cluster.capacityFlexibility === undefined ? {} : {capacityFlexibility: cluster.capacityFlexibility}), ...(cluster.eligibleClassIds === undefined ? {} : { eligibleClassIds: [...new Set(cluster.eligibleClassIds)] }), label, description:String(cluster.description??'').slice(0,2000), rationaleMode:cluster.rationaleMode??'optional', requiredRankingCount: cluster.requiredRankingCount, balanceByClass: cluster.balanceByClass === true, courses: snapshotCourses }
+    let weeklySlot: import('../../src/domain/weeklySlot').WeeklySlot | undefined
+    try { weeklySlot = parseWeeklySlot(cluster.weeklySlot) } catch (error) { throw new HttpsError('invalid-argument', error instanceof Error ? error.message : 'מועד המקבץ אינו תקין') }
+    return { clusterId, ...(cluster.capacityFlexibility === undefined ? {} : {capacityFlexibility: cluster.capacityFlexibility}), ...(cluster.eligibleClassIds === undefined ? {} : { eligibleClassIds: [...new Set(cluster.eligibleClassIds)] }), ...(weeklySlot ? { weeklySlot } : {}), label, description:String(cluster.description??'').slice(0,2000), rationaleMode:cluster.rationaleMode??'optional', requiredRankingCount: cluster.requiredRankingCount, balanceByClass: cluster.balanceByClass === true, courses: snapshotCourses }
   })
   const catalog: CycleCatalogSnapshot = { ...base, id: `catalog-${cycleId}`, cycleId, formDesign, clusters: catalogClusters }
   return firestore.runTransaction(async (transaction) => {
@@ -206,6 +237,45 @@ export const getCycleCatalog = onCall(callableOptions, async (request) => {
   return { catalog: catalog.exists ? catalog.data() : null, courses: courses.exists ? courses.data()?.courses ?? [] : [] }
 })
 
+export const setClusterWeeklySlots = onCall(callableOptions, async request => {
+  try {
+  const actor = await actorFromRequest(request)
+  if (!actor.capabilities.includes('nativ.assignment.manage')) throw new HttpsError('permission-denied', 'אין הרשאה לעדכן מועדי קורסים')
+  const data = inputRecord(request.data)
+  const cycleId = requiredString(data, 'cycleId')
+  const expectedVersion = requiredInteger(data, 'expectedVersion')
+  if (!Array.isArray(data.slots)) throw new HttpsError('invalid-argument', 'יש להזין מועדי מקבצים תקינים')
+  const updates = new Map<string, import('../../src/domain/weeklySlot').WeeklySlot | undefined>()
+  for (const item of data.slots) {
+    if (!item || typeof item !== 'object' || typeof item.clusterId !== 'string' || updates.has(item.clusterId)) throw new HttpsError('invalid-argument', 'רשימת המקבצים אינה תקינה')
+    try { updates.set(item.clusterId, parseWeeklySlot(item.weeklySlot)) } catch (error) { throw new HttpsError('invalid-argument', error instanceof Error ? error.message : 'מועד המקבץ אינו תקין') }
+  }
+  return firestore.runTransaction(async transaction => {
+    const reference = firestore.doc(catalogSnapshotDocumentPath(actor.organizationId, cycleId))
+    const cycleReference = firestore.doc(cycleDocumentPath(actor.organizationId, cycleId))
+    const [catalogSnapshot, cycleSnapshot] = await transaction.getAll(reference, cycleReference)
+    const catalog = catalogSnapshot.data() as CycleCatalogSnapshot | undefined
+    const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
+    if (!catalog || !cycle) throw new HttpsError('not-found', 'המחזור או המקבצים לא נמצאו')
+    if (catalog.version !== expectedVersion) throw new HttpsError('aborted', 'מועדי המקבצים השתנו. רעננו לפני שמירה.')
+    if (cycle.status === 'closed') throw new HttpsError('failed-precondition', 'המחזור סגור; אי אפשר לשנות את זמני הקורסים')
+    if ([...updates.keys()].some(id => !catalog.clusters.some(cluster => cluster.clusterId === id))) throw new HttpsError('invalid-argument', 'אחד המקבצים אינו שייך למחזור')
+    const now = new Date().toISOString()
+    const clusters = catalog.clusters.map(cluster => {
+      if (!updates.has(cluster.clusterId)) return cluster
+      const weeklySlot = updates.get(cluster.clusterId)
+      const next = { ...cluster, ...(weeklySlot ? { weeklySlot } : {}) }
+      if (!weeklySlot) delete next.weeklySlot
+      return next
+    })
+    const next: CycleCatalogSnapshot = { ...catalog, clusters, version: catalog.version + 1, updatedAt: now, updatedBy: actor.uid }
+    transaction.set(reference, next)
+    transaction.create(firestore.collection(`organizations/${actor.organizationId}/nativAuditEvents`).doc(), { id: randomUUID(), organizationId: actor.organizationId, actorId: actor.uid, occurredAt: now, action: 'catalog.weekly_slots.updated', entityType: 'CycleCatalogSnapshot', entityId: cycleId, reason: 'מועדי המפגש של המקבצים עודכנו', beforeVersion: catalog.version, afterVersion: next.version })
+    return next
+  })
+  } catch (error) { return operationalError(String(request.auth?.token.organizationId ?? ''), 'set_cluster_weekly_slots', error) }
+})
+
 export const getInstructorWorkspace = onCall(callableOptions, async (request) => {
   const actor = await actorFromRequest(request, 'read')
   if (!actor.roles.includes('course_instructor')) throw new HttpsError('permission-denied', 'המסך זמין למנחי קורסים בלבד')
@@ -226,7 +296,7 @@ export const getInstructorWorkspace = onCall(callableOptions, async (request) =>
     cycle: { schoolYear: cycle.schoolYear, termLabel: cycle.termLabel, status: cycle.status },
     documentUrl: courses.length ? formDesign?.documentUrl : undefined,
     hasWordDocument: Boolean(courses.length && formDesign?.documentStoragePath),
-    courses: courses.map((course) => ({ id: course.id, label: course.label, description: course.description, subjectArea: course.subjectArea, students: publishedAssignments.filter((assignment) => assignment.courseId === course.id).map((assignment) => [assignment.studentLabel ?? 'תלמיד', assignment.studentClassLabel].filter(Boolean).join(' · ')) })),
+    courses: courses.map((course) => ({ id: course.id, label: course.label, description: course.description, subjectArea: course.subjectArea, weeklySlot: (formSnapshot.data() as CycleCatalogSnapshot | undefined)?.clusters.find(cluster => cluster.clusterId === course.clusterId)?.weeklySlot, students: publishedAssignments.filter((assignment) => assignment.courseId === course.id).map((assignment) => [assignment.studentLabel ?? 'תלמיד', assignment.studentClassLabel].filter(Boolean).join(' · ')) })),
   }
 })
 

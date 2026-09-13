@@ -60,7 +60,7 @@ export async function createCycle(schoolYear: string, termLabel: string): Promis
 }
 
 export interface CatalogCourseDraft { capacityLimit?: number; documentUrl?: string; imageUrl?: string; label: string; description: string; subjectArea: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: 'allowed' | 'approval_required' | 'discouraged' | 'prohibited' }
-export interface CatalogClusterDraft { capacityFlexibility?: number; eligibleClassIds?: string[]; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass: boolean; courses: CatalogCourseDraft[] }
+export interface CatalogClusterDraft { capacityFlexibility?: number; eligibleClassIds?: string[]; weeklySlot?: import('../domain/weeklySlot').WeeklySlot; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass: boolean; courses: CatalogCourseDraft[] }
 export async function saveCycleCatalog(cycleId: string, clusters: CatalogClusterDraft[], formDesign?: import('../domain/formDesign').FormDesign, expectedVersion?: number): Promise<void> {
   await httpsCallable<Record<string, unknown>, unknown>(functionsClient(), 'saveCycleCatalog')({ cycleId, clusters, ...(formDesign ? { formDesign } : {}), ...(expectedVersion === undefined ? {} : {expectedVersion}) })
 }
@@ -101,7 +101,7 @@ export async function extractCourseDescriptions(source: DescriptionSource, candi
   return (await httpsCallable<Record<string, unknown>, {results:ExtractedDescriptionResult[];readerEmail:string}>(functionsClient(), 'extractCourseDescriptions', {timeout:180000})({...source,candidates})).data
 }
 
-export interface InstructorWorkspaceData { cycle: { schoolYear: string; termLabel: string; status: CycleStatus }; documentUrl?: string; hasWordDocument?: boolean; courses: Array<{ id: string; label: string; description: string; subjectArea: string; students: string[] }> }
+export interface InstructorWorkspaceData { cycle: { schoolYear: string; termLabel: string; status: CycleStatus }; documentUrl?: string; hasWordDocument?: boolean; courses: Array<{ id: string; label: string; description: string; subjectArea: string; weeklySlot?: import('../domain/weeklySlot').WeeklySlot; students: string[] }> }
 export async function getInstructorWorkspace(cycleId: string): Promise<InstructorWorkspaceData> {
   return (await httpsCallable<{ cycleId: string }, InstructorWorkspaceData>(functionsClient(), 'getInstructorWorkspace')({ cycleId })).data
 }
@@ -134,6 +134,14 @@ export async function generateAiEvaluations(cycleId: string, refresh = false): P
   return (await httpsCallable<{ cycleId: string; refresh: boolean }, WorkflowState>(functionsClient(), 'generateAiEvaluations', { timeout: 540000 })({ cycleId, refresh })).data
 }
 
+export async function setClusterWeeklySlots(cycleId:string,expectedVersion:number,slots:Array<{clusterId:string;weeklySlot?:import('../domain/weeklySlot').WeeklySlot}>):Promise<import('../domain/catalog').CycleCatalogSnapshot> {
+  return (await httpsCallable<Record<string,unknown>,import('../domain/catalog').CycleCatalogSnapshot>(functionsClient(),'setClusterWeeklySlots')({cycleId,expectedVersion,slots})).data
+}
+
+export async function setAppealDeadline(cycleId:string,expectedVersion:number,appealClosesAt:string|null):Promise<AssignmentCycle> {
+  return (await httpsCallable<Record<string,unknown>,AssignmentCycle>(functionsClient(),'setAppealDeadline')({cycleId,expectedVersion,appealClosesAt})).data
+}
+
 export async function getStudentRoster(cycleId: string): Promise<import('../domain/studentRoster').StudentRosterEntry[]> {
   return (await httpsCallable<{ cycleId: string }, import('../domain/studentRoster').StudentRosterEntry[]>(functionsClient(), 'getStudentRoster')({ cycleId })).data
 }
@@ -158,6 +166,10 @@ export async function selectAssignmentRun(cycleId:string,runId:string):Promise<W
   return (await httpsCallable<{cycleId:string;runId:string},WorkflowState>(functionsClient(),'selectAssignmentRun')({cycleId,runId})).data
 }
 
+export async function saveManualProposedAssignment(cycleId:string,studentId:string,clusterId:string,courseId:string,reason:string,expectedVersion:number):Promise<WorkflowState> {
+  return (await httpsCallable<Record<string,unknown>,WorkflowState>(functionsClient(),'saveManualProposedAssignment')({cycleId,studentId,clusterId,courseId,reason,expectedVersion})).data
+}
+
 export async function approveAssignmentRun(cycleId: string): Promise<WorkflowState> {
   return (await httpsCallable<{ cycleId: string }, WorkflowState>(functionsClient(), 'approveAssignmentRun')({ cycleId })).data
 }
@@ -178,8 +190,8 @@ export async function recommendAppeal(cycleId: string, appealId: string, outcome
   return (await httpsCallable<Record<string, unknown>, WorkflowState>(functionsClient(), 'recommendAppeal')({ cycleId, appealId, outcome, reason })).data
 }
 
-export async function decideAppeal(cycleId: string, appealId: string, outcome: 'approved' | 'rejected'): Promise<WorkflowState> {
-  return (await httpsCallable<Record<string, unknown>, WorkflowState>(functionsClient(), 'decideAppeal')({ cycleId, appealId, outcome, reason: outcome === 'approved' ? 'הבקשה נמצאה אפשרית ומוצדקת' : 'הבקשה נדחתה לאחר בחינת הנתונים' })).data
+export async function decideAppeal(cycleId: string, appealId: string, outcome: 'approved' | 'rejected', reason: string): Promise<WorkflowState> {
+  return (await httpsCallable<Record<string, unknown>, WorkflowState>(functionsClient(), 'decideAppeal')({ cycleId, appealId, outcome, reason })).data
 }
 
 export async function approveCapacityOverride(cycleId: string, appealId: string): Promise<WorkflowState> {

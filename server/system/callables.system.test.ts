@@ -177,6 +177,15 @@ describe('Nativ callable system flow', () => {
     const selectRun=httpsCallable<{cycleId:string;runId:string},WorkflowState>(functions,'selectAssignmentRun')
     workflow=(await selectRun({cycleId:demoCycle.id,runId:baselineRunId})).data
     expect(workflow.assignmentRun?.assignments).toHaveLength(2)
+    const manualProposal=httpsCallable<Record<string,unknown>,WorkflowState>(functions,'saveManualProposedAssignment')
+    const artsAssignment=workflow.assignmentRun!.assignments.find(entry=>entry.clusterId==='cluster-arts')!
+    const alternateArts=artsAssignment.courseId==='course-theater'?'course-music':'course-theater'
+    await expect(manualProposal({cycleId:demoCycle.id,studentId:'student-demo-001',clusterId:'cluster-arts',courseId:alternateArts,reason:'בדיקת גרסה',expectedVersion:0})).rejects.toMatchObject({code:'functions/aborted'})
+    workflow=(await manualProposal({cycleId:demoCycle.id,studentId:'student-demo-001',clusterId:'cluster-arts',courseId:alternateArts,reason:'התאמה אישית בבדיקה',expectedVersion:workflow.version})).data
+    expect(workflow.assignmentRun?.assignments.find(entry=>entry.clusterId==='cluster-arts')?.courseId).toBe(alternateArts)
+    expect(workflow.assignmentRun).toMatchObject({parentRunId:baselineRunId,manualChanges:[{studentId:'student-demo-001',afterCourseId:alternateArts}]})
+    expect(workflow.assignmentRun?.approvedAt).toBeUndefined()
+    expect((await listRuns({cycleId:demoCycle.id})).data.find(entry=>entry.id===baselineRunId)?.assignments.find(entry=>entry.clusterId==='cluster-arts')?.courseId).toBe(artsAssignment.courseId)
     await expect(transition({ cycleId: demoCycle.id, expectedVersion: 3, to: 'published', reason: 'ניסיון לעקוף אישור', idempotencyKey: 'system-publish-bypass-blocked' })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
 
     await signOut(auth)
@@ -190,6 +199,9 @@ describe('Nativ callable system flow', () => {
     await signInWithEmailAndPassword(auth, coordinatorBeforePublication.email, coordinatorBeforePublication.password)
 
     const approveRun = httpsCallable<{ cycleId: string }, WorkflowState>(functions, 'approveAssignmentRun')
+    await workflowDocument.update({ 'assignmentRun.assignments': workflow.assignmentRun!.assignments.slice(0, 1) })
+    await expect(approveRun({ cycleId: demoCycle.id })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+    await workflowDocument.update({ 'assignmentRun.assignments': workflow.assignmentRun!.assignments })
     workflow = (await approveRun({ cycleId: demoCycle.id })).data
     expect(workflow.assignmentRun?.approvedAt).toBeTruthy()
     expect(workflow.assignmentRun?.publishedAt).toBeUndefined()
@@ -220,7 +232,17 @@ describe('Nativ callable system flow', () => {
     expect(publicationEvents.docs.find(doc => doc.data().jobs[0].audience === 'student')?.data().jobs[0].results).toHaveLength(2)
     await expect(publish({ cycleId: demoCycle.id })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
     expect((await mailEvents()).size).toBe(2)
+    const getCatalog = httpsCallable<{cycleId:string},{catalog:{version:number;clusters:Array<{clusterId:string;weeklySlot?:{weekday:number}}>}}>(functions,'getCycleCatalog')
+    const currentCatalog = (await getCatalog({cycleId:demoCycle.id})).data.catalog
+    const setSlots = httpsCallable<Record<string,unknown>,{clusters:Array<{clusterId:string;weeklySlot?:{weekday:number}}>}>(functions,'setClusterWeeklySlots')
+    const scheduled = (await setSlots({cycleId:demoCycle.id,expectedVersion:currentCatalog.version,slots:currentCatalog.clusters.map(entry=>({clusterId:entry.clusterId,weeklySlot:{weekday:2,periodStart:3,periodEnd:4}}))})).data
+    expect(scheduled.clusters.every(entry=>entry.weeklySlot?.weekday===2)).toBe(true)
     await transition({ cycleId: demoCycle.id, expectedVersion: 4, to: 'appeals', reason: 'פתיחת ערעורים בבדיקת מערכת', idempotencyKey: 'system-open-appeals' })
+    const setAppealDeadline=httpsCallable<Record<string,unknown>,AssignmentCycle>(functions,'setAppealDeadline')
+    const firstDeadline=(await setAppealDeadline({cycleId:demoCycle.id,expectedVersion:5,appealClosesAt:new Date(Date.now()+60000).toISOString()})).data
+    expect(firstDeadline.appealDeadlineEnabled).toBe(true)
+    const extendedDeadline=(await setAppealDeadline({cycleId:demoCycle.id,expectedVersion:firstDeadline.version,appealClosesAt:new Date(Date.now()+120000).toISOString()})).data
+    expect(new Date(extendedDeadline.appealClosesAt!).getTime()).toBeGreaterThan(new Date(firstDeadline.appealClosesAt!).getTime())
 
     await signOut(auth)
     const student = accounts.find((account) => account.label === 'תלמיד')!
@@ -253,6 +275,11 @@ describe('Nativ callable system flow', () => {
     expect(workflow.assignmentRun!.assignments.find((entry) => entry.studentId === 'student-demo-001' && entry.clusterId === 'cluster-arts')!.courseId).toBe(current.courseId)
     expect(workflow.appeals.find((entry) => entry.id === appeal.id)?.status).toBe('approved_pending_execution')
     expect((await mailEvents()).size).toBe(2)
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, student.email, student.password)
+    expect((await getStudentWorkflow({cycleId:demoCycle.id,view:'student'})).data.appeals.find(entry=>entry.id===appeal.id)?.decision?.reason).toBe('אפשרי לאחר ניתוח')
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, coordinator.email, coordinator.password)
 
     const execute = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'executeAppealChange')
     workflow = (await execute({ cycleId: demoCycle.id, appealId: appeal.id, expectedWorkflowVersion: workflow.version })).data

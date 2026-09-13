@@ -12,6 +12,8 @@ export interface AssignmentCycle extends VersionedEntity {
   choiceDeadlineEnabled?: boolean
   publishedAt?: string
   appealWindowSchoolDays: number
+  appealClosesAt?: string
+  appealDeadlineEnabled?: boolean
   rulesVersion: string
 }
 

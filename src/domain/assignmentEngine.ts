@@ -30,7 +30,7 @@ export interface AssignmentResult {
   clusterId: string
   courseId: string
   rank: number | null
-  source: 'hard_constraint' | 'ranked_choice' | 'fallback_submitter' | 'fallback_non_submitter'
+  source: 'hard_constraint' | 'ranked_choice' | 'fallback_submitter' | 'fallback_non_submitter' | 'manual'
   aiPriority: AiPriority
   explanation: string
 }

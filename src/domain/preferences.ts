@@ -16,6 +16,7 @@ export interface CourseSnapshot {
 }
 
 export interface ClusterSnapshot {
+  weeklySlot?: import('./weeklySlot').WeeklySlot
   capacityFlexibility?: number
   eligibleClassIds?: string[]
   description?: string

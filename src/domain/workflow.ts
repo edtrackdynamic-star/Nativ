@@ -28,6 +28,8 @@ export interface AssignmentRun {
   scope?: AssignmentParticipationScope
   includedStudentClusterCount?: number
   excludedStudentClusterCount?: number
+  parentRunId?: string
+  manualChanges?: { studentId: string; clusterId: string; beforeCourseId?: string; afterCourseId: string; changedAt: string; changedBy: string; reason: string }[]
   approvedAt?: string
   approvedBy?: string
   publishedAt?: string
