@@ -1,7 +1,7 @@
 import type { ClusterPreference, ClusterSnapshot } from '../domain/preferences'
 import { SchoolBrand } from '../components/SchoolBrand'
 
-export function SubmittedChoices({ clusters, preferences, submittedAt, canEdit, onEdit, editClosedReason, pendingDraft, schoolName, schoolLogo, generated = false }: {
+export function SubmittedChoices({ clusters, preferences, submittedAt, canEdit, onEdit, editClosedReason, pendingDraft, schoolName, schoolLogo, generated = false, statusMessage }: {
   clusters: ClusterSnapshot[]
   preferences: ClusterPreference[]
   submittedAt?: string
@@ -12,6 +12,7 @@ export function SubmittedChoices({ clusters, preferences, submittedAt, canEdit, 
   schoolName?: string
   schoolLogo?: string
   generated?: boolean
+  statusMessage?: string
 }) {
   return <section className="submitted-choices" aria-labelledby="submitted-choices-title">
     {schoolName && <SchoolBrand className="submitted-school-brand" imageClassName="submitted-school-logo" name={schoolName} src={schoolLogo} />}
@@ -19,7 +20,8 @@ export function SubmittedChoices({ clusters, preferences, submittedAt, canEdit, 
       <div><span className="eyebrow">{generated ? 'בחירות לצורך הדגמה' : 'הבחירות שלך הוגשו'}</span><h2 id="submitted-choices-title">{generated ? 'הבחירות לדוגמה שלך' : 'תודה שבחרת!'}</h2></div>
       <span className="status-pill">{generated ? 'נתוני הדגמה' : 'הוגש'}</span>
     </div>
-    <p>{generated ? 'הבחירות האלה נוצרו לצורך בדיקת השיבוץ ולא מולאו על ידך. אפשר לערוך ולהגיש אותן מחדש כל עוד הטופס פתוח.' : 'הבחירות שלך נקלטו. השיבוץ הסופי יופיע כאן לאחר פרסומו.'}</p>
+    {generated && <p>הבחירות האלה נוצרו לצורך בדיקת השיבוץ ולא מולאו על ידך.</p>}
+    <p role="status">{statusMessage ?? (generated ? 'אפשר לערוך ולהגיש את הבחירות מחדש כל עוד הטופס פתוח.' : 'הבחירות שלך נקלטו. השיבוץ הסופי יופיע כאן לאחר פרסומו.')}</p>
     {submittedAt && <p className="submitted-at">הוגש בתאריך {new Date(submittedAt).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Jerusalem' })}</p>}
     {pendingDraft && <p className="choice-pending-draft" role="status">יש שינויים שלא הוגשו. הבחירות שמוצגות כאן הן הבחירות שהוגשו בפועל.</p>}
     <div className="submitted-choices-list">{clusters.map((cluster) => {

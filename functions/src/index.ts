@@ -70,7 +70,7 @@ export const listCycles = onCall(callableOptions, async (request) => {
   if (!actor.roles.length) throw new HttpsError('permission-denied', 'לא הוקצה תפקיד בנתיב')
   const snapshot = await firestore.collection(`organizations/${actor.organizationId}/nativCycles`).get()
   const cycles = snapshot.docs.map((entry) => entry.data() as AssignmentCycle)
-  if (actor.roles.includes('student') && !actor.capabilities.includes('nativ.assignment.view')) return cycles.filter((cycle) => ['choice_open', 'published', 'appeals', 'closed'].includes(cycle.status)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  if (actor.roles.includes('student') && !actor.capabilities.includes('nativ.assignment.view')) return cycles.filter((cycle) => ['choice_open', 'choice_closed', 'assignment', 'published', 'appeals', 'closed'].includes(cycle.status)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   return cycles.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 })
 

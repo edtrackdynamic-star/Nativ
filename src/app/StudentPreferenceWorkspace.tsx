@@ -185,6 +185,7 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
 
   if (['published', 'appeals', 'closed'].includes(cycle.status)) {
     const assignments = workflow.assignmentRun?.assignments ?? []
+    if (!assignments.length) return <section className="workspace-card" aria-label="מצב השיבוץ שלי"><h2>השיבוץ שלי</h2><p role="status">השיבוץ פורסם, אך לא נמצא עבורך קורס משובץ. פנו לרכז השיבוץ לבירור.</p>{latestSubmission && <SubmittedChoices clusters={latestSubmission.catalogSnapshot} preferences={latestSubmission.preferences} submittedAt={latestSubmission.submittedAt} canEdit={false} onEdit={() => undefined} editClosedReason="תקופת הבחירה הסתיימה." schoolName={schoolName} schoolLogo={schoolLogo} generated={latestSubmission.source === 'demo_seed'} />}</section>
     const today = todayWeekdayIsrael()
     const todayAssignments = assignments.filter(assignment => context.catalog.clusters.find(cluster => cluster.clusterId === assignment.clusterId)?.weeklySlot?.weekday === today)
     const appealDeadlinePassed = Boolean(cycle.appealDeadlineEnabled && cycle.appealClosesAt && new Date(cycle.appealClosesAt).getTime() <= new Date(now).getTime())
@@ -210,7 +211,13 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
 
   if (latestSubmission && (!editing || !canEdit)) {
     const editClosedReason = readOnly ? 'הצפייה בחשבון זה היא לקריאה בלבד.' : deadlinePassed ? 'מועד עריכת הבחירות הסתיים. אם הרכז יאריך את מועד ההגשה, אפשר יהיה לערוך שוב.' : cycle.status === 'assignment' ? 'השיבוץ החל, ולכן אי אפשר עוד לשנות את הבחירות.' : 'תקופת הבחירה נסגרה, ולכן אי אפשר עוד לשנות את הבחירות.'
-    return <section className="workspace-card"><SubmittedChoices clusters={latestSubmission.catalogSnapshot} preferences={latestSubmission.preferences} submittedAt={latestSubmission.submittedAt} canEdit={canEdit} onEdit={() => setEditing(true)} editClosedReason={editClosedReason} pendingDraft={signature !== submittedSignature} schoolName={schoolName} schoolLogo={schoolLogo} generated={latestSubmission.source === 'demo_seed'} /></section>
+    const generated = latestSubmission.source === 'demo_seed'
+    const statusMessage = cycle.status === 'assignment'
+      ? generated ? 'הבחירות לדוגמה נכללות בתהליך השיבוץ. השיבוץ שלך יופיע כאן לאחר פרסום התוצאות.' : 'הבחירות שלך נקלטו ונמצאות בתהליך שיבוץ. השיבוץ שלך יופיע כאן לאחר פרסום התוצאות.'
+      : cycle.status === 'choice_closed'
+        ? generated ? 'הבחירות לדוגמה הועברו לשיבוץ. השיבוץ שלך יופיע כאן לאחר פרסום התוצאות.' : 'הבחירות שלך נקלטו והועברו לשיבוץ. השיבוץ שלך יופיע כאן לאחר פרסום התוצאות.'
+        : undefined
+    return <section className="workspace-card"><SubmittedChoices clusters={latestSubmission.catalogSnapshot} preferences={latestSubmission.preferences} submittedAt={latestSubmission.submittedAt} canEdit={canEdit} onEdit={() => setEditing(true)} editClosedReason={editClosedReason} pendingDraft={signature !== submittedSignature} schoolName={schoolName} schoolLogo={schoolLogo} generated={latestSubmission.source === 'demo_seed'} statusMessage={statusMessage} /></section>
   }
 
   if (!context.catalog.clusters.length) return <section className="workspace-card"><h2>הבחירות שלי</h2><p>אין מקבצים פתוחים לכיתתך בתהליך הזה. לבדיקת שיוך הכיתה אפשר לפנות לרכז.</p></section>

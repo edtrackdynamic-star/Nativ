@@ -18,10 +18,12 @@ describe('submitted choices confirmation', () => {
   })
 
   it('explains closed editing and separates unsent draft changes', () => {
-    const html = renderToStaticMarkup(<SubmittedChoices clusters={clusters} preferences={preferences} canEdit={false} onEdit={() => undefined} pendingDraft editClosedReason="השיבוץ החל, ולכן אי אפשר עוד לשנות את הבחירות." />)
+    const html = renderToStaticMarkup(<SubmittedChoices clusters={clusters} preferences={preferences} canEdit={false} onEdit={() => undefined} pendingDraft editClosedReason="השיבוץ החל, ולכן אי אפשר עוד לשנות את הבחירות." statusMessage="הבחירות שלך נקלטו ונמצאות בתהליך שיבוץ. השיבוץ שלך יופיע כאן לאחר פרסום התוצאות." />)
     expect(html).not.toContain('עריכת הבחירות</button>')
     expect(html).toContain('השיבוץ החל')
     expect(html).toContain('יש שינויים שלא הוגשו')
+    expect(html).toContain('נמצאות בתהליך שיבוץ')
+    expect(html).toContain('תיאטרון')
   })
 
   it('labels generated demo choices without attributing them to the student', () => {

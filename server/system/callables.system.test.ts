@@ -112,6 +112,14 @@ describe('Nativ callable system flow', () => {
       idempotencyKey: 'system-close-cycle',
     })).data
     expect(updated).toMatchObject({ status: 'choice_closed', version: 2 })
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, student.email, student.password)
+    const listCycles = httpsCallable<undefined, AssignmentCycle[]>(functions, 'listCycles')
+    expect((await listCycles()).data).toContainEqual(expect.objectContaining({ id: demoCycle.id, status: 'choice_closed' }))
+    const submissions = httpsCallable<{ cycleId: string }, PreferenceSubmission[]>(functions, 'listMySubmissions')
+    expect((await submissions({ cycleId: demoCycle.id })).data).toContainEqual(expect.objectContaining({ status: 'submitted', studentId: 'student-demo-001' }))
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, coordinator.email, coordinator.password)
   })
 
   it('runs anonymous AI review, deterministic placement, publication, and a two-step appeal change', async () => {
@@ -162,6 +170,16 @@ describe('Nativ callable system flow', () => {
     workflow = (await run({ cycleId: demoCycle.id,label:'הרצה מלאה' })).data
     expect(workflow.assignmentRun?.assignments).toHaveLength(2)
     expect(workflow.assignmentRun).toMatchObject({ algorithmVersion: 'negative-last-resort-1.1.0', seed: 42 })
+    const previewStudent = accounts.find((account) => account.label === 'תלמיד')!
+    const previewCoordinator = accounts.find((account) => account.label === 'רכז שיבוץ')!
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, previewStudent.email, previewStudent.password)
+    const listCycles = httpsCallable<undefined, AssignmentCycle[]>(functions, 'listCycles')
+    expect((await listCycles()).data).toContainEqual(expect.objectContaining({ id: demoCycle.id, status: 'assignment' }))
+    const studentWorkflow = httpsCallable<{ cycleId: string; view: 'student' }, WorkflowState>(functions, 'getWorkflow')
+    expect((await studentWorkflow({ cycleId: demoCycle.id, view: 'student' })).data.assignmentRun).toBeNull()
+    await signOut(auth)
+    await signInWithEmailAndPassword(auth, previewCoordinator.email, previewCoordinator.password)
     const baselineRunId=workflow.assignmentRun!.id
     workflow=(await run({cycleId:demoCycle.id,label:'ללא אמנויות לתלמיד ההדגמה',scope:{excludedClassIdsByCluster:{},excludedStudentIdsByCluster:{'cluster-arts':['student-demo-001']}}})).data
     expect(workflow.assignmentRun).toMatchObject({label:'ללא אמנויות לתלמיד ההדגמה',excludedStudentClusterCount:1})
