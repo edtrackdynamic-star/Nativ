@@ -23,4 +23,11 @@ describe('submitted choices confirmation', () => {
     expect(html).toContain('השיבוץ החל')
     expect(html).toContain('יש שינויים שלא הוגשו')
   })
+
+  it('labels generated demo choices without attributing them to the student', () => {
+    const html = renderToStaticMarkup(<SubmittedChoices clusters={clusters} preferences={preferences} canEdit onEdit={() => undefined} generated />)
+    expect(html).toContain('נתוני הדגמה')
+    expect(html).toContain('לא מולאו על ידך')
+    expect(html).not.toContain('תודה שבחרת!')
+  })
 })

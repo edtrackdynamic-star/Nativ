@@ -48,6 +48,7 @@ export const getStudentRoster = onCall(callableOptions, async (request) => {
     const assignments = byStudent.get(id) ?? []
     return { id, name: profile?.displayLabel ?? 'תלמיד', classId: profile?.classId ?? '', classLabel: profile?.classLabel ?? 'ללא כיתת־אם',
       status: assignments.length ? 'assigned' : submission ? 'submitted' : 'not_submitted',
+      choiceSource: submission?.source,
       choices: submission?.preferences.flatMap((entry) => entry.rankings.map((ranking) => ({ clusterId: entry.clusterId, ...ranking }))) ?? [], assignments }
   })
   return students.sort((a, b) => a.classLabel.localeCompare(b.classLabel, 'he') || a.name.localeCompare(b.name, 'he'))

@@ -1,6 +1,7 @@
 export interface StudentRosterEntry {
   id: string; name: string; classId: string; classLabel: string
   status: 'not_submitted' | 'submitted' | 'assigned'
+  choiceSource?: 'demo_seed' | 'nativ_app' | 'google_forms_import'
   choices: { clusterId: string; courseId: string; rank: number }[]
   assignments: { clusterId: string; courseId: string }[]
 }

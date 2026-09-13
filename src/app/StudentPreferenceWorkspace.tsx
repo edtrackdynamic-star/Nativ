@@ -204,7 +204,7 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
 
   if (latestSubmission && (!editing || !canEdit)) {
     const editClosedReason = readOnly ? 'הצפייה בחשבון זה היא לקריאה בלבד.' : deadlinePassed ? 'מועד עריכת הבחירות הסתיים. אם הרכז יאריך את מועד ההגשה, אפשר יהיה לערוך שוב.' : cycle.status === 'assignment' ? 'השיבוץ החל, ולכן אי אפשר עוד לשנות את הבחירות.' : 'תקופת הבחירה נסגרה, ולכן אי אפשר עוד לשנות את הבחירות.'
-    return <section className="workspace-card"><SubmittedChoices clusters={latestSubmission.catalogSnapshot} preferences={latestSubmission.preferences} submittedAt={latestSubmission.submittedAt} canEdit={canEdit} onEdit={() => setEditing(true)} editClosedReason={editClosedReason} pendingDraft={signature !== submittedSignature} schoolName={schoolName} schoolLogo={schoolLogo} /></section>
+    return <section className="workspace-card"><SubmittedChoices clusters={latestSubmission.catalogSnapshot} preferences={latestSubmission.preferences} submittedAt={latestSubmission.submittedAt} canEdit={canEdit} onEdit={() => setEditing(true)} editClosedReason={editClosedReason} pendingDraft={signature !== submittedSignature} schoolName={schoolName} schoolLogo={schoolLogo} generated={latestSubmission.source === 'demo_seed'} /></section>
   }
 
   if (!context.catalog.clusters.length) return <section className="workspace-card"><h2>הבחירות שלי</h2><p>אין מקבצים פתוחים לכיתתך בתהליך הזה. לבדיקת שיוך הכיתה אפשר לפנות לרכז.</p></section>
