@@ -27,6 +27,29 @@ describe('runDeterministicAssignment', () => {
     expect(result.assignments.find((entry) => entry.studentId === 'art')).toMatchObject({ courseId: 'a', aiPriority: 'high' })
   })
 
+  it('tries a lower ranked non-negative course before a ranked course marked negative', () => {
+    const learner: AssignmentStudent = { studentId: 'learner', displayLabel: 'learner', approvedAiByCourse: { b: 'negative' }, submission: { preferences: [{ clusterId: 'cluster', rankings: [{ courseId: 'a', rank: 1 }, { courseId: 'b', rank: 2 }, { courseId: 'c', rank: 3 }] }] } }
+    const rival: AssignmentStudent = { studentId: 'rival', displayLabel: 'rival', approvedAiByCourse: { a: 'high' }, submission: { preferences: [{ clusterId: 'cluster', rankings: [{ courseId: 'a', rank: 1 }] }] } }
+    const result = runDeterministicAssignment({ cycleId: 'cycle', clusterIds: ['cluster'], courses: [course('a'), course('b'), course('c')], students: [rival, learner] })
+    expect(result.assignments.find((entry) => entry.studentId === 'learner')).toMatchObject({ courseId: 'c', rank: 3 })
+    expect(result.warnings).toEqual([])
+  })
+
+  it('uses a non-negative unranked alternative before a negative ranked course', () => {
+    const learner: AssignmentStudent = { studentId: 'learner', displayLabel: 'learner', approvedAiByCourse: { b: 'negative' }, submission: { preferences: [{ clusterId: 'cluster', rankings: [{ courseId: 'a', rank: 1 }, { courseId: 'b', rank: 2 }] }] } }
+    const rival: AssignmentStudent = { studentId: 'rival', displayLabel: 'rival', approvedAiByCourse: { a: 'high' }, submission: { preferences: [{ clusterId: 'cluster', rankings: [{ courseId: 'a', rank: 1 }] }] } }
+    const result = runDeterministicAssignment({ cycleId: 'cycle', clusterIds: ['cluster'], courses: [course('a'), course('b'), course('c')], students: [rival, learner] })
+    expect(result.assignments.find((entry) => entry.studentId === 'learner')).toMatchObject({ courseId: 'c', source: 'fallback_submitter' })
+  })
+
+  it('uses a negative course only as a last resort and warns the coordinator', () => {
+    const learner: AssignmentStudent = { studentId: 'learner', displayLabel: 'learner', approvedAiByCourse: { b: 'negative' }, submission: { preferences: [{ clusterId: 'cluster', rankings: [{ courseId: 'a', rank: 1 }, { courseId: 'b', rank: 2 }] }] } }
+    const rival: AssignmentStudent = { studentId: 'rival', displayLabel: 'rival', approvedAiByCourse: { a: 'high' }, submission: { preferences: [{ clusterId: 'cluster', rankings: [{ courseId: 'a', rank: 1 }] }] } }
+    const result = runDeterministicAssignment({ cycleId: 'cycle', clusterIds: ['cluster'], courses: [course('a'), course('b')], students: [rival, learner] })
+    expect(result.assignments.find((entry) => entry.studentId === 'learner')).toMatchObject({ courseId: 'b', rank: 2, aiPriority: 'negative', source: 'fallback_submitter' })
+    expect(result.warnings).toContainEqual(expect.stringContaining('הסתייגות מפורשת'))
+  })
+
   it('places submitters before students who did not submit', () => {
     const result = runDeterministicAssignment({ cycleId: 'cycle', clusterIds: ['cluster'], courses: [course('a'), course('b')], students: [student('submitted', 'a', 'neutral'), { studentId: 'none', displayLabel: 'none' }] })
     expect(result.assignments.find((entry) => entry.studentId === 'submitted')?.courseId).toBe('a')
@@ -35,9 +58,10 @@ describe('runDeterministicAssignment', () => {
 
   it('enforces must-assign and prohibited-repeat rules', () => {
     const courses = [course('a'), { ...course('b'), logicalCourseId: 'old', repeatPolicy: 'prohibited' as const }]
-    const students: AssignmentStudent[] = [{ ...student('s', 'b', 'high'), previouslyCompletedLogicalCourseIds: ['old'] }]
+    const students: AssignmentStudent[] = [{ ...student('s', 'b', 'high'), approvedAiByCourse: { a: 'negative' }, previouslyCompletedLogicalCourseIds: ['old'] }]
     const result = runDeterministicAssignment({ cycleId: 'cycle', clusterIds: ['cluster'], courses, students, constraints: [{ studentId: 's', clusterId: 'cluster', type: 'must_assign', courseId: 'a', note: 'צורך פדגוגי' }] })
     expect(result.assignments[0]).toMatchObject({ studentId: 's', courseId: 'a', source: 'hard_constraint' })
+    expect(result.warnings).toContainEqual(expect.stringContaining('אילוץ חובה'))
   })
 
   it('keeps class balancing disabled unless the cluster explicitly enables it', () => {

@@ -17,6 +17,7 @@ it('requires individual review for unclear, strong or legacy recommendations', (
   expect(needsIndividualAiReview({ ...evaluation, raw: { ...evaluation.raw, coursePriorities: evaluation.raw.coursePriorities!.map((entry) => ({ ...entry, priority: 'neutral' })) } })).toBe(true)
   expect(needsIndividualAiReview({ ...evaluation, raw: { ...evaluation.raw, coursePriorities: [{ courseId: 'art', priority: 'high', reason: 'x' }, evaluation.raw.coursePriorities![1]] } })).toBe(true)
   expect(needsIndividualAiReview({ ...evaluation, raw: { ...evaluation.raw, coursePriorities: [{ courseId: 'art', priority: 'medium', reason: 'x' }, { courseId: 'science', priority: 'medium', reason: 'x' }] } })).toBe(true)
+  expect(needsIndividualAiReview({ ...evaluation, raw: { ...evaluation.raw, coursePriorities: [{ courseId: 'art', priority: 'medium', reason: 'x' }, { courseId: 'science', priority: 'negative', reason: 'הסתייגות מפורשת' }] } })).toBe(true)
 })
 
 it('does not require individual review for neutral submissions without a rationale', () => {

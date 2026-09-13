@@ -134,17 +134,25 @@ describe('Nativ callable system flow', () => {
     expect(workflow.aiEvaluations.every((entry) => entry.raw.coursePriorities?.length === entry.input.courses?.length)).toBe(true)
     expect((await getFirestore(adminApp).collection(`organizations/${demoCycle.organizationId}/aiEvaluationArchives`).get()).size).toBe(2)
 
+    const withNegative = workflow.aiEvaluations.map((entry) => entry.clusterId !== 'cluster-tech' ? entry : {
+      ...entry, input: { ...entry.input, rationale: 'אני רוצה לבנות ולחקור, ומעדיף לא קורס מעבדה' },
+      raw: { ...entry.raw, coursePriorities: entry.raw.coursePriorities?.map((course) => course.courseId === 'course-lab' ? { ...course, priority: 'negative' as const, reason: 'הסתייגות מפורשת מקורס מעבדה' } : course) },
+    })
+    await workflowDocument.update({ aiEvaluations: withNegative })
+    workflow = { ...workflow, aiEvaluations: withNegative }
+
     const approveGroup = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'approveAiEvaluations')
     const previousVersion = workflow.version
     workflow = (await approveGroup({ cycleId: demoCycle.id, mode: 'clear_only', expectedVersion: previousVersion })).data
     expect(workflow.aiEvaluations.filter((entry) => entry.approved)).toHaveLength(1)
     await expect(approveGroup({ cycleId: demoCycle.id, mode: 'all', expectedVersion: previousVersion })).rejects.toMatchObject({ code: 'functions/aborted' })
-    workflow = (await approveGroup({ cycleId: demoCycle.id, mode: 'all', expectedVersion: workflow.version })).data
-    expect(workflow.aiEvaluations.every((entry) => entry.approved)).toBe(true)
+    await expect(approveGroup({ cycleId: demoCycle.id, mode: 'all', expectedVersion: workflow.version })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
 
     const approve = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'approveAiEvaluation')
+    const withoutRejection = workflow.aiEvaluations.find((entry) => !entry.input.rationale)!
+    await expect(approve({ cycleId: demoCycle.id, evaluationId: withoutRejection.id, priority: 'negative', summary: 'בדיקה', coursePriorities: withoutRejection.raw.coursePriorities!.map((course, index) => ({ courseId: course.courseId, priority: index === 0 ? 'negative' : 'neutral' })), reason: 'בדיקת ולידציה' })).rejects.toMatchObject({ code: 'functions/invalid-argument' })
     const manuallyReviewed = workflow.aiEvaluations.find((entry) => entry.input.rationale)!
-    const coursePriorities = manuallyReviewed.raw.coursePriorities!.map((course, index) => ({ courseId: course.courseId, priority: index === 0 ? 'medium' : 'neutral' }))
+    const coursePriorities = manuallyReviewed.raw.coursePriorities!.map((course, index) => ({ courseId: course.courseId, priority: course.courseId === 'course-lab' ? 'negative' : index === 0 ? 'medium' : 'neutral' }))
     workflow = (await approve({ cycleId: demoCycle.id, evaluationId: manuallyReviewed.id, priority: 'medium', summary: manuallyReviewed.raw.summary, coursePriorities, reason: 'אישור פרטני בבדיקת מערכת' })).data
     expect(workflow.aiEvaluations.every((entry) => entry.approved)).toBe(true)
 
@@ -153,7 +161,7 @@ describe('Nativ callable system flow', () => {
     const run = httpsCallable<Record<string,unknown>, WorkflowState>(functions, 'runAssignment')
     workflow = (await run({ cycleId: demoCycle.id,label:'הרצה מלאה' })).data
     expect(workflow.assignmentRun?.assignments).toHaveLength(2)
-    expect(workflow.assignmentRun).toMatchObject({ algorithmVersion: 'legacy-compatible-1.0.0', seed: 42 })
+    expect(workflow.assignmentRun).toMatchObject({ algorithmVersion: 'negative-last-resort-1.1.0', seed: 42 })
     const baselineRunId=workflow.assignmentRun!.id
     workflow=(await run({cycleId:demoCycle.id,label:'ללא אמנויות לתלמיד ההדגמה',scope:{excludedClassIdsByCluster:{},excludedStudentIdsByCluster:{'cluster-arts':['student-demo-001']}}})).data
     expect(workflow.assignmentRun).toMatchObject({label:'ללא אמנויות לתלמיד ההדגמה',excludedStudentClusterCount:1})

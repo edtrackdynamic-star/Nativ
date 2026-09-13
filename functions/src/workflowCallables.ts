@@ -1,7 +1,7 @@
 import { includesClass } from '../../src/domain/classEligibility'
 import { needsIndividualAiReview } from '../../src/domain/aiReview'
 import { defineSecret } from 'firebase-functions/params'
-import { evaluateWithGemini, GEMINI_MODEL, sanitizeRationale } from '../../server/gemini/evaluation'
+import { evaluateWithGemini, GEMINI_MODEL, hasExplicitRejection, sanitizeRationale } from '../../server/gemini/evaluation'
 import type { EvaluationCourse } from '../../server/gemini/evaluation'
 import { createHash, randomUUID } from 'node:crypto'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
@@ -222,7 +222,7 @@ export const generateAiEvaluations = onCall({ ...callableOptions, secrets: [gemi
       evaluations.push(...batch.map(({ submission, preference, id, rationale, clusterLabel, courses }): AiEvaluation => {
         const result = results.find((entry) => entry.id === id) ?? { summary: 'לא נמסר נימוק; ההערכה ניטרלית.', courses: courses.map((course) => ({ courseId: course.courseId, priority: 'neutral' as const, reason: 'לא נמסר נימוק לקורס זה.' })) }
         const coursePriorities = result.courses.map((course) => ({ ...course, reason: sanitizeRationale(course.reason, identities) || 'יש לבדוק את הקשר בין ההסבר לקורס.' }))
-        const priority = coursePriorities.some((course) => course.priority === 'high') ? 'high' : coursePriorities.some((course) => course.priority === 'medium') ? 'medium' : 'neutral'
+        const priority = coursePriorities.some((course) => course.priority === 'high') ? 'high' : coursePriorities.some((course) => course.priority === 'medium') ? 'medium' : coursePriorities.some((course) => course.priority === 'neutral') ? 'neutral' : 'negative'
         return { id, anonymousStudentRef: 'anon-' + id, studentId: submission.studentId, clusterId: preference.clusterId,
           sourceSubmissionId: submission.id, sourceSubmissionVersion: submission.submissionVersion,
           input: { rankings: preference.rankings, clusterLabel, courses, ...(rationale ? { rationale } : {}) },
@@ -270,7 +270,7 @@ export const approveAiEvaluation = onCall(callableOptions, async (request) => {
   const cycleId = requiredString(data, 'cycleId')
   const evaluationId = requiredString(data, 'evaluationId')
   const priority = requiredString(data, 'priority') as AiPriority
-  if (!['high', 'medium', 'neutral'].includes(priority)) throw new HttpsError('invalid-argument', 'עדיפות AI אינה תקינה')
+  if (!['high', 'medium', 'neutral', 'negative'].includes(priority)) throw new HttpsError('invalid-argument', 'עדיפות AI אינה תקינה')
   const summary = requiredString(data, 'summary')
   const reason = requiredString(data, 'reason')
   const submittedCoursePriorities = data.coursePriorities
@@ -291,12 +291,13 @@ export const approveAiEvaluation = onCall(callableOptions, async (request) => {
         const entry = inputRecord(value)
         const courseId = requiredString(entry, 'courseId')
         const coursePriority = requiredString(entry, 'priority') as AiPriority
-        if (!expected.has(courseId) || seen.has(courseId) || !['high', 'medium', 'neutral'].includes(coursePriority)) throw new HttpsError('invalid-argument', 'העדיפות לאחד הקורסים אינה תקינה')
+        if (!expected.has(courseId) || seen.has(courseId) || !['high', 'medium', 'neutral', 'negative'].includes(coursePriority)) throw new HttpsError('invalid-argument', 'העדיפות לאחד הקורסים אינה תקינה')
         if (target.input.courses?.find((course) => course.courseId === courseId)?.rank === null && coursePriority !== 'neutral') throw new HttpsError('invalid-argument', 'לא ניתן לתת עדיפות לקורס שלא דורג')
+        if (coursePriority === 'negative' && !hasExplicitRejection(target.input.rationale ?? '')) throw new HttpsError('invalid-argument', 'אפשר לסמן עדיפות שלילית רק כשהתלמיד כתב הסתייגות מפורשת מהקורס. בדקו את הנימוק או בחרו ניטרלית.')
         seen.add(courseId)
         return { courseId, priority: coursePriority }
       })
-      const derivedPriority = coursePriorities.some((entry) => entry.priority === 'high') ? 'high' : coursePriorities.some((entry) => entry.priority === 'medium') ? 'medium' : 'neutral'
+      const derivedPriority = coursePriorities.some((entry) => entry.priority === 'high') ? 'high' : coursePriorities.some((entry) => entry.priority === 'medium') ? 'medium' : coursePriorities.some((entry) => entry.priority === 'neutral') ? 'neutral' : 'negative'
       if (priority !== derivedPriority) throw new HttpsError('invalid-argument', 'סיכום העדיפות אינו תואם את העדיפויות לקורסים')
     }
     const evaluations = current.aiEvaluations.map((evaluation) => evaluation.id === evaluationId ? { ...evaluation, approved: { priority, summary, reason, approvedAt: now, approvedBy: actor.uid, ...(coursePriorities ? { coursePriorities } : {}) } } : evaluation)
@@ -348,7 +349,7 @@ export const runAssignment = onCall(callableOptions, async (request) => {
   const calculated = runDeterministicAssignment({ cycleId, clusterIds, courses, students, eligibleClassIdsByCluster: Object.fromEntries(catalog.clusters.map(c => [c.clusterId, c.eligibleClassIds])), excludedClassIdsByCluster:scope.excludedClassIdsByCluster, excludedStudentIdsByCluster:scope.excludedStudentIdsByCluster, balanceByClassClusterIds: catalog.clusters.filter((cluster) => cluster.balanceByClass).map((cluster) => cluster.clusterId) })
   const result = { ...calculated, assignments: calculated.assignments.map((assignment) => ({ ...assignment, studentLabel: profiles.get(assignment.studentId)?.displayLabel ?? 'תלמיד', studentClassLabel: profiles.get(assignment.studentId)?.classLabel })) }
   const now = new Date().toISOString()
-  const assignmentRun: AssignmentRun = { id:randomUUID(), label, executedAt:now, executedBy:actor.uid, algorithmVersion:'legacy-compatible-1.0.0', seed:42, scope, includedStudentClusterCount, excludedStudentClusterCount:eligiblePairs.length-includedStudentClusterCount, ...result }
+  const assignmentRun: AssignmentRun = { id:randomUUID(), label, executedAt:now, executedBy:actor.uid, algorithmVersion:'negative-last-resort-1.1.0', seed:42, scope, includedStudentClusterCount, excludedStudentClusterCount:eligiblePairs.length-includedStudentClusterCount, ...result }
   return firestore.runTransaction(async (transaction) => {
     const reference = workflowRef(actor, cycleId)
     const [currentSnapshot, currentCycleSnapshot] = await transaction.getAll(reference, firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)))
@@ -663,7 +664,7 @@ export const approveAiEvaluations = onCall(callableOptions, async (request) => {
     if (current.version !== expectedVersion) throw new HttpsError('aborted', 'הערכות ההעדפות השתנו. רעננו ובדקו שוב לפני אישור מרוכז.')
     if (!current.aiBatchCreatedAt || !current.aiEvaluations.length) throw new HttpsError('failed-precondition', 'ההערכות טרם הוכנו. יש ליצור אותן לפני האישור.')
     if (current.assignmentRun) throw new HttpsError('failed-precondition', 'כבר נוצרה הרצת שיבוץ. יש לבדוק אותה לפני אישור הערכות נוספות.')
-    const selected = current.aiEvaluations.filter((evaluation) => !evaluation.approved && (mode === 'all' || !needsIndividualAiReview(evaluation)))
+    const selected = current.aiEvaluations.filter((evaluation) => !evaluation.approved && !evaluation.raw.coursePriorities?.some((course) => course.priority === 'negative') && (mode === 'all' || !needsIndividualAiReview(evaluation)))
     if (!selected.length) throw new HttpsError('failed-precondition', 'אין הערכות מתאימות לאישור במצב שנבחר')
     const ids = new Set(selected.map((evaluation) => evaluation.id))
     const evaluations = current.aiEvaluations.map((evaluation) => ids.has(evaluation.id) ? { ...evaluation, approved: { priority: evaluation.raw.priority, summary: evaluation.raw.summary, reason: mode === 'all' ? 'אישור מרוכז של הרכז' : 'אישור מרוכז לאחר סינון מקרים לבדיקה', approvedAt: now, approvedBy: actor.uid,

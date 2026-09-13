@@ -144,6 +144,8 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .evaluation-review .evaluation-course { padding: 14px; background: #f8faff; }
 .evaluation-course-heading { display: flex; justify-content: space-between; align-items: start; gap: 10px; }
 .evaluation-course-heading span { padding: 4px 9px; border-radius: 999px; color: #155b9d; background: #e7eef6; font-size: .75rem; font-weight: 800; white-space: nowrap; }
+.evaluation-course-heading span[data-priority="negative"] { color: #8c3a19; background: #fff0e8; }
+.evaluation-priority-hint { margin: 0; color: var(--ink-muted); font-size: .83rem; line-height: 1.5; }
 .evaluation-review .evaluation-course label { font-size: .78rem; }
 .evaluation-review .evaluation-course select { min-height: 44px; }
 .evaluation-course details { border-top: 1px solid var(--line); padding-top: 8px; }

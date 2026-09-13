@@ -19,7 +19,7 @@ export interface AssignmentRun {
   label?: string
   executedAt: string
   executedBy: string
-  algorithmVersion: 'legacy-compatible-1.0.0'
+  algorithmVersion: 'legacy-compatible-1.0.0' | 'negative-last-resort-1.1.0'
   seed: 42
   assignments: AssignmentResult[]
   enrollmentByCourse: Record<string, number>

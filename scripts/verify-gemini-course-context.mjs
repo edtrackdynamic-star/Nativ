@@ -21,13 +21,19 @@ const courses = [
 const results = await evaluateWithGemini(key, [
   { id: 'general-interest', rationale: 'אני אוהבת יצירה ואמנות', clusterLabel: 'מקבץ קורסי בחירה', courses },
   { id: 'concrete-goal', rationale: 'בניתי דגמים מקרטון בבית ואני רוצה ללמוד איך לתכנן מבנה יציב שלא קורס.', clusterLabel: 'מקבץ קורסי בחירה', courses },
+  { id: 'explicit-rejection', rationale: 'אני מתעניין ברפואה והצלת חיים ומעדיף לא פילאטיס.', clusterLabel: 'מקבץ קורסי בחירה', courses: [
+    { courseId: 'synthetic-medicine', label: 'רפואה והצלת חיים', description: 'היכרות עם רפואה ועזרה ראשונה', rank: 1 },
+    { courseId: 'synthetic-pilates', label: 'פילאטיס', description: 'תנועה, יציבה וחיזוק הגוף', rank: 2 },
+  ] },
 ])
 const general = results.find((entry) => entry.id === 'general-interest')
 const concrete = results.find((entry) => entry.id === 'concrete-goal')
-if (!general || !concrete || general.courses.length !== 2 || concrete.courses.length !== 2) throw new Error('Unexpected course evaluation result.')
+const rejected = results.find((entry) => entry.id === 'explicit-rejection')
+if (!general || !concrete || !rejected || general.courses.length !== 2 || concrete.courses.length !== 2 || rejected.courses.length !== 2) throw new Error('Unexpected course evaluation result.')
 if (general.courses.find((entry) => entry.courseId === 'synthetic-art')?.priority !== 'medium'
   || general.courses.find((entry) => entry.courseId === 'synthetic-science')?.priority !== 'neutral'
-  || concrete.courses.find((entry) => entry.courseId === 'synthetic-art')?.priority !== 'high') {
-  throw new Error(`Course rubric mismatch: ${JSON.stringify({ general: general.courses.map((entry) => entry.priority), concrete: concrete.courses.map((entry) => entry.priority) })}`)
+  || concrete.courses.find((entry) => entry.courseId === 'synthetic-art')?.priority !== 'high'
+  || rejected.courses.find((entry) => entry.courseId === 'synthetic-pilates')?.priority !== 'negative') {
+  throw new Error(`Course rubric mismatch: ${JSON.stringify({ general: general.courses.map((entry) => entry.priority), concrete: concrete.courses.map((entry) => entry.priority), rejected: rejected.courses.map((entry) => entry.priority) })}`)
 }
-console.log(JSON.stringify({ model: 'gemini-2.5-flash', structuredOutput: 'passed', general: general.courses.map((entry) => entry.priority), concrete: concrete.courses.map((entry) => entry.priority), realStudentDataSent: false }))
+console.log(JSON.stringify({ model: 'gemini-2.5-flash', structuredOutput: 'passed', general: general.courses.map((entry) => entry.priority), concrete: concrete.courses.map((entry) => entry.priority), rejected: rejected.courses.map((entry) => entry.priority), realStudentDataSent: false }))

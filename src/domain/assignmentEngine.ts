@@ -2,7 +2,7 @@ import { includesClass } from './classEligibility'
 import type { Course } from './catalog'
 import type { ClusterPreference } from './preferences'
 
-export type AiPriority = 'high' | 'medium' | 'neutral'
+export type AiPriority = 'high' | 'medium' | 'neutral' | 'negative'
 
 export interface AssignmentStudent {
   studentId: string
@@ -42,7 +42,7 @@ export interface AssignmentRunResult {
   tieBreaks: string[]
 }
 
-const priorityValue: Record<AiPriority, number> = { high: 3, medium: 2, neutral: 1 }
+const priorityValue: Record<AiPriority, number> = { high: 3, medium: 2, neutral: 1, negative: 0 }
 const priorityForCourse = (student: AssignmentStudent, clusterId: string, courseId: string): AiPriority =>
   student.approvedAiByCourse?.[courseId] ?? student.approvedAiByCluster?.[clusterId] ?? 'neutral'
 
@@ -101,7 +101,10 @@ export function runDeterministicAssignment(input: {
       const student = students.find((entry) => entry.studentId === constraint.studentId)
       const course = courses.find((entry) => entry.id === constraint.courseId)
       if (!student || !course || !allowed(student, course) || enrollmentByCourse[course.id] >= course.capacity.maximum) throw new Error(`אילוץ חובה אינו ניתן לביצוע: ${constraint.studentId} / ${constraint.courseId}`)
-      if (!assigned.has(student.studentId)) add(student, course, null, 'hard_constraint', `אילוץ קשיח: ${constraint.note}`)
+      if (!assigned.has(student.studentId)) {
+        add(student, course, null, 'hard_constraint', `אילוץ קשיח: ${constraint.note}`)
+        if (priorityForCourse(student, clusterId, course.id) === 'negative') warnings.push(`${student.displayLabel}: שובץ לקורס ${course.label} שסומן בהסתייגות מפורשת בעקבות אילוץ חובה`)
+      }
     }
 
     const submitters = students.filter((student) => student.submission?.preferences.some((preference) => preference.clusterId === clusterId))
@@ -112,7 +115,7 @@ export function runDeterministicAssignment(input: {
           const limit = phase === 'target' ? course.capacity.target : course.capacity.maximum
           const available = limit - enrollmentByCourse[course.id]
           if (available <= 0) continue
-          const candidates = submitters.filter((student) => !assigned.has(student.studentId) && allowed(student, course) && student.submission?.preferences.find((preference) => preference.clusterId === clusterId)?.rankings.some((ranking) => ranking.rank === rank && ranking.courseId === course.id))
+          const candidates = submitters.filter((student) => !assigned.has(student.studentId) && allowed(student, course) && priorityForCourse(student, clusterId, course.id) !== 'negative' && student.submission?.preferences.find((preference) => preference.clusterId === clusterId)?.rankings.some((ranking) => ranking.rank === rank && ranking.courseId === course.id))
           const candidateCount = candidates.length
           for (let index = 0; index < available && candidates.length; index += 1) {
             candidates.sort((left, right) => {
@@ -128,15 +131,24 @@ export function runDeterministicAssignment(input: {
       }
     }
 
-    const chooseFallback = (student: AssignmentStudent, label: string) => courses.filter((course) => enrollmentByCourse[course.id] < course.capacity.maximum && allowed(student, course)).map((course) => ({ course, gap: course.capacity.target - enrollmentByCourse[course.id], classCount: classCount(student, course), count: enrollmentByCourse[course.id], key: deterministicKey(`${clusterId}|${label}|${student.studentId}|${course.id}`) })).sort((left, right) => right.gap - left.gap || (balanceByClass ? left.classCount - right.classCount : 0) || left.count - right.count || left.key.localeCompare(right.key))[0]?.course
+    const chooseFallback = (student: AssignmentStudent, label: string, negative: boolean) => courses.filter((course) => enrollmentByCourse[course.id] < course.capacity.maximum && allowed(student, course) && (priorityForCourse(student, clusterId, course.id) === 'negative') === negative).map((course) => ({ course, gap: course.capacity.target - enrollmentByCourse[course.id], classCount: classCount(student, course), count: enrollmentByCourse[course.id], key: deterministicKey(`${clusterId}|${label}|${student.studentId}|${course.id}`) })).sort((left, right) => right.gap - left.gap || (balanceByClass ? left.classCount - right.classCount : 0) || left.count - right.count || left.key.localeCompare(right.key))[0]?.course
     for (const student of submitters.filter((entry) => !assigned.has(entry.studentId))) {
-      const course = chooseFallback(student, 'fallback')
+      const course = chooseFallback(student, 'fallback', false)
       if (course) add(student, course, null, 'fallback_submitter', 'שיבוץ משלים לאחר מיצוי הקורסים שדורגו')
-      else warnings.push(`${student.displayLabel}: לא נמצא מקום פנוי במקבץ ${clusterId}`)
+    }
+    for (const student of submitters.filter((entry) => !assigned.has(entry.studentId))) {
+      const course = chooseFallback(student, 'fallback-negative', true)
+      if (!course) {
+        warnings.push(`${student.displayLabel}: לא נמצא מקום פנוי במקבץ ${clusterId}`)
+        continue
+      }
+      const rank = student.submission?.preferences.find((preference) => preference.clusterId === clusterId)?.rankings.find((entry) => entry.courseId === course.id)?.rank ?? null
+      add(student, course, rank, 'fallback_submitter', 'שיבוץ בקורס שסומן בהסתייגות מפורשת לאחר שלא נמצאה חלופה זמינה')
+      warnings.push(`${student.displayLabel}: שובץ לקורס ${course.label} שסומן בהסתייגות מפורשת לאחר שלא נמצאה חלופה זמינה`)
     }
     const nonSubmitters = students.filter((student) => !submitters.includes(student)).sort((left, right) => deterministicKey(`${clusterId}|non-submitter|${left.studentId}`).localeCompare(deterministicKey(`${clusterId}|non-submitter|${right.studentId}`)))
     for (const student of nonSubmitters.filter((entry) => !assigned.has(entry.studentId))) {
-      const course = chooseFallback(student, 'non-submitter')
+      const course = chooseFallback(student, 'non-submitter', false) ?? chooseFallback(student, 'non-submitter-negative', true)
       if (course) add(student, course, null, 'fallback_non_submitter', 'שיבוץ לאחר מתן קדימות למגישים')
       else warnings.push(`${student.displayLabel}: לא נמצא מקום פנוי במקבץ ${clusterId}`)
     }
