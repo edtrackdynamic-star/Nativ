@@ -12,6 +12,11 @@ export interface DemoAccount { label: string; email: string; password: string }
 export interface AccessUserSummary { uid: string; email?: string; displayName?: string; coreRole?: string; roles: RoleId[]; capabilities: CapabilityId[]; active: boolean }
 export interface NativSessionAccess { organizationId: string; organizationName: string; organizationLogoPath: string; roles: RoleId[]; capabilities: CapabilityId[]; accessMode: 'full' | 'read_only'; coreRole: string; displayName: string; email: string }
 export interface GoogleAccessOption { id: string; name: string; role: string }
+export interface LoginSchool { id: string; name: string }
+
+export async function listLoginSchools(): Promise<LoginSchool[]> {
+  return (await httpsCallable<Record<string, never>, { schools: LoginSchool[] }>(functionsClient(), 'listLoginSchools')({})).data.schools
+}
 
 function functionsClient() {
   if (!nativFunctions) throw new Error('Firebase אינו מוגדר בסביבה זו')
@@ -189,8 +194,8 @@ export async function setUserAccess(uid: string, roles: RoleId[], active: boolea
   await httpsCallable<Record<string, unknown>, unknown>(functionsClient(), 'setUserAccess')({ uid, roles, active })
 }
 
-export async function requestAccessCodeLogin(alias: string, code: string): Promise<string> {
-  return (await httpsCallable<{organizationId: string; alias: string; code: string}, {customToken: string}>(functionsClient(), 'loginWithAccessCode')({organizationId: import.meta.env.VITE_ORGANIZATION_ID || 'democratic-wizo', alias, code})).data.customToken
+export async function requestAccessCodeLogin(organizationId: string, alias: string, code: string): Promise<string> {
+  return (await httpsCallable<{organizationId: string; alias: string; code: string}, {customToken: string}>(functionsClient(), 'loginWithAccessCode')({organizationId, alias, code})).data.customToken
 }
 
 export type DeliveryAudience = 'student' | 'staff'

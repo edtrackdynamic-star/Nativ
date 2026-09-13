@@ -14,13 +14,15 @@ import { AppealReviewerWorkspace } from './AppealReviewerWorkspace'
 import { CoordinatorWorkflowWorkspace } from './CoordinatorWorkflowWorkspace'
 import { CycleSetupWorkspace } from './CycleSetupWorkspace'
 import { InstructorWorkspace } from './InstructorWorkspace'
-import { requestAccessCodeLogin, claimInitialAccessManager, exchangeGoogleIdentity, getMyNativAccess, listCycles, listGoogleAccessOptions, seedDemoEnvironment, type DemoAccount, type GoogleAccessOption, type NativSessionAccess } from './firebaseApi'
+import { requestAccessCodeLogin, claimInitialAccessManager, exchangeGoogleIdentity, getMyNativAccess, listCycles, listGoogleAccessOptions, listLoginSchools, seedDemoEnvironment, type DemoAccount, type GoogleAccessOption, type LoginSchool, type NativSessionAccess } from './firebaseApi'
 import { SecretaryWorkspace } from './SecretaryWorkspace'
 import { StudentPreferenceWorkspace } from './StudentPreferenceWorkspace'
+import { initialLoginSchoolId } from './loginSchool'
 
 interface SessionProfile { user: User; access: NativSessionAccess }
 const areaLabels: Partial<Record<RoleId, string>> = { student: 'הבחירות שלי', placement_coordinator: 'ניהול השיבוץ', appeal_reviewer: 'בדיקת ערעורים', access_manager: 'ניהול גישה', secretary: 'דיווחים למזכירות', course_instructor: 'הקורסים שלי' }
 const areaOrder: RoleId[] = ['student', 'placement_coordinator', 'appeal_reviewer', 'secretary', 'course_instructor', 'access_manager']
+const initialSchoolId = initialLoginSchoolId(window.location.search)
 
 function friendlyError(error: unknown, fallback: string) {
   if (!(error instanceof Error)) return fallback
@@ -53,9 +55,23 @@ export function NativMvp() {
   const [authError, setAuthError] = useState(false)
   const [alias, setAlias] = useState('')
   const [code, setCode] = useState('')
+  const [loginSchoolId, setLoginSchoolId] = useState(initialSchoolId)
+  const [loginSchools, setLoginSchools] = useState<LoginSchool[]>([])
+  const [loginSchoolsError, setLoginSchoolsError] = useState(false)
   const [logoResult, setLogoResult] = useState({ path: '', url: '' })
   const schoolLogo = logoResult.path === session?.access.organizationLogoPath ? logoResult.url : ''
   const authRequest = useRef(0)
+
+  useEffect(() => {
+    if (!firebaseConfigured || emulatorMode) return
+    let active = true
+    void listLoginSchools().then((schools) => {
+      if (!active) return
+      setLoginSchools(schools)
+      setLoginSchoolsError(false)
+    }).catch(() => { if (active) setLoginSchoolsError(true) })
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     if (!nativAuth) return
@@ -115,12 +131,22 @@ export function NativMvp() {
   }
   async function loginWithCode() {
     if (!nativAuth || pending) return
+    let credentialsChecked = false
     try {
       setPending(true); setMessage('נכנס למערכת…')
-      const token = await requestAccessCodeLogin(alias.trim(), code)
+      if (!loginSchoolId) { setMessage('בחרו בית ספר כדי להיכנס.'); return }
+      const token = await requestAccessCodeLogin(loginSchoolId, alias.trim(), code)
+      credentialsChecked = true
       await signInWithCustomToken(nativAuth, token)
       setCode(''); setAuthReload((value) => value + 1)
-    } catch { setMessage('הכניסה לא הושלמה. בדקו את השם והקוד האישי ונסו שוב. אם הבעיה נמשכת, פנו למנהל בית הספר.') }
+    } catch (error) {
+      const errorCode = String((error as { code?: unknown } | null)?.code ?? '')
+      setMessage(credentialsChecked
+        ? 'הפרטים זוהו, אך הכניסה לא הושלמה. בדקו את החיבור ונסו שוב.'
+        : ['functions/unavailable', 'functions/deadline-exceeded', 'auth/network-request-failed'].includes(errorCode)
+          ? 'לא ניתן לבדוק את פרטי הכניסה בגלל בעיית תקשורת. בדקו את החיבור ונסו שוב.'
+          : 'לא ניתן להיכנס. בדקו שבחרתם את בית הספר הנכון ושהשם והקוד האישי תואמים.')
+    }
     finally { setPending(false) }
   }
   async function loginWithGoogle() {
@@ -172,6 +198,12 @@ export function NativMvp() {
     {authError && <button type="button" className="secondary-action" onClick={() => setAuthReload((value) => value + 1)}>ניסיון חוזר</button>}
     {authenticatedUser && !session && authError && <button type="button" className="secondary-action" disabled={pending} onClick={() => void chooseSchool()}>בחירת בית ספר</button>}
     {!authenticatedUser && <form className="login-form" onSubmit={(event) => { event.preventDefault(); void loginWithCode() }}>
+      <label>בית ספר<select value={loginSchoolId} onChange={(event) => setLoginSchoolId(event.target.value)} required disabled={pending}>
+        <option value="">בחרו בית ספר</option>
+        {loginSchoolId && !loginSchools.some((school) => school.id === loginSchoolId) && <option value={loginSchoolId}>בית הספר שבקישור</option>}
+        {loginSchools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
+      </select></label>
+      {loginSchoolsError && <p role="status">לא ניתן לטעון את רשימת בתי הספר. נסו לרענן את הדף או השתמשו בקישור שקיבלתם מבית הספר.</p>}
       <label>שם מלא<input autoComplete="username" value={alias} onChange={(event) => setAlias(event.target.value)} required minLength={2} disabled={pending} /></label>
       <label>סיסמה / קוד אישי<input type="password" inputMode="numeric" autoComplete="current-password" pattern="[0-9]{4,8}" minLength={4} maxLength={8} value={code} onChange={(event) => setCode(event.target.value)} required disabled={pending} aria-describedby="login-help" /></label>
       <p id="login-help">השם והקוד האישי שקיבלתם מבית הספר, כמו בכניסה לאדטרק.</p>
