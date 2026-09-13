@@ -115,17 +115,32 @@ describe('Nativ callable system flow', () => {
   })
 
   it('runs anonymous AI review, deterministic placement, publication, and a two-step appeal change', async () => {
-    const generate = httpsCallable<{ cycleId: string }, WorkflowState>(functions, 'generateAiEvaluations')
+    const generate = httpsCallable<{ cycleId: string; refresh?: boolean }, WorkflowState>(functions, 'generateAiEvaluations')
     let workflow = (await generate({ cycleId: demoCycle.id })).data
     const repeated = (await generate({ cycleId: demoCycle.id })).data
     expect(repeated.aiEvaluations.map((entry) => entry.id)).toEqual(workflow.aiEvaluations.map((entry) => entry.id))
     expect(workflow.aiEvaluations).toHaveLength(2)
     expect(workflow.aiEvaluations.every((entry) => entry.anonymousStudentRef.startsWith('anon-'))).toBe(true)
+    expect(workflow.aiEvaluations.every((entry) => entry.input.courses?.every((course) => Boolean(course.label)) && entry.raw.coursePriorities?.length === entry.input.courses.length)).toBe(true)
+    const workflowDocument = getFirestore(adminApp).doc(`organizations/${demoCycle.organizationId}/nativWorkflows/${demoCycle.id}`)
+    const previousEvaluations = workflow.aiEvaluations.map((entry) => { const raw = { ...entry.raw }; delete raw.coursePriorities; return { ...entry, raw } })
+    await workflowDocument.update({ aiEvaluations: previousEvaluations })
+    workflow = (await generate({ cycleId: demoCycle.id, refresh: true })).data
+    expect(workflow.aiEvaluations.every((entry) => entry.raw.coursePriorities?.length === entry.input.courses?.length)).toBe(true)
+    expect((await getFirestore(adminApp).collection(`organizations/${demoCycle.organizationId}/aiEvaluationArchives`).get()).size).toBe(1)
+
+    const approveGroup = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'approveAiEvaluations')
+    const previousVersion = workflow.version
+    workflow = (await approveGroup({ cycleId: demoCycle.id, mode: 'clear_only', expectedVersion: previousVersion })).data
+    expect(workflow.aiEvaluations.filter((entry) => entry.approved)).toHaveLength(1)
+    await expect(approveGroup({ cycleId: demoCycle.id, mode: 'all', expectedVersion: previousVersion })).rejects.toMatchObject({ code: 'functions/aborted' })
+    workflow = (await approveGroup({ cycleId: demoCycle.id, mode: 'all', expectedVersion: workflow.version })).data
+    expect(workflow.aiEvaluations.every((entry) => entry.approved)).toBe(true)
 
     const approve = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'approveAiEvaluation')
-    for (const evaluation of workflow.aiEvaluations) {
-      workflow = (await approve({ cycleId: demoCycle.id, evaluationId: evaluation.id, priority: evaluation.raw.priority, summary: evaluation.raw.summary, reason: 'אישור בדיקת מערכת' })).data
-    }
+    const manuallyReviewed = workflow.aiEvaluations.find((entry) => entry.input.rationale)!
+    const coursePriorities = manuallyReviewed.raw.coursePriorities!.map((course, index) => ({ courseId: course.courseId, priority: index === 0 ? 'medium' : 'neutral' }))
+    workflow = (await approve({ cycleId: demoCycle.id, evaluationId: manuallyReviewed.id, priority: 'medium', summary: manuallyReviewed.raw.summary, coursePriorities, reason: 'אישור פרטני בבדיקת מערכת' })).data
     expect(workflow.aiEvaluations.every((entry) => entry.approved)).toBe(true)
 
     const transition = httpsCallable<Record<string, unknown>, AssignmentCycle>(functions, 'transitionCycle')
@@ -444,7 +459,7 @@ describe('Nativ callable system flow', () => {
     await signOut(auth);await signInWithEmailAndPassword(auth,coordinator.email,coordinator.password)
     cycle=await call<AssignmentCycle>('transitionCycle',{cycleId:cycle.id,expectedVersion:cycle.version,to:'choice_closed',reason:'test',idempotencyKey:'class-close'})
     let workflow=await call<WorkflowState>('generateAiEvaluations',{cycleId:cycle.id})
-    for(const evaluation of workflow.aiEvaluations) workflow=await call<WorkflowState>('approveAiEvaluation',{cycleId:cycle.id,evaluationId:evaluation.id,priority:'neutral',summary:'test',reason:'test'})
+    for(const evaluation of workflow.aiEvaluations) workflow=await call<WorkflowState>('approveAiEvaluation',{cycleId:cycle.id,evaluationId:evaluation.id,priority:'neutral',summary:'test',coursePriorities:evaluation.raw.coursePriorities?.map(course=>({...course,priority:'neutral'})),reason:'test'})
     cycle=await call<AssignmentCycle>('getCycle',{cycleId:cycle.id})
     await call('transitionCycle',{cycleId:cycle.id,expectedVersion:cycle.version,to:'assignment',reason:'test',idempotencyKey:'class-assign'})
     workflow=await call<WorkflowState>('runAssignment',{cycleId:cycle.id})

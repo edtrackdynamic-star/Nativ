@@ -1,6 +1,8 @@
 import { includesClass } from '../../src/domain/classEligibility'
+import { needsIndividualAiReview } from '../../src/domain/aiReview'
 import { defineSecret } from 'firebase-functions/params'
 import { evaluateWithGemini, GEMINI_MODEL, sanitizeRationale } from '../../server/gemini/evaluation'
+import type { EvaluationCourse } from '../../server/gemini/evaluation'
 import { createHash, randomUUID } from 'node:crypto'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
 import { getAuth } from 'firebase-admin/auth'
@@ -65,6 +67,16 @@ function mockEvaluation(rationale: string | undefined): { priority: AiPriority; 
   if (!normalized) return { priority: 'neutral', summary: 'לא נמסר נימוק; בהתאם למדיניות אין הפחתת עדיפות.' }
   if (/(פרויקט|ניסיון|בניתי|למדתי|מתמיד|חשוב|חלום|עתיד)/u.test(normalized)) return { priority: 'high', summary: 'הנימוק מציג חיבור אישי ממוקד או ניסיון קודם.' }
   return { priority: 'medium', summary: 'נמסר נימוק רלוונטי לבחירה.' }
+}
+
+function coursesForEvaluation(submission: PreferenceSubmission, preference: PreferenceSubmission['preferences'][number]): { clusterLabel: string; courses: EvaluationCourse[] } {
+  const snapshot = submission.catalogSnapshot.find((cluster) => cluster.clusterId === preference.clusterId)
+  if (!snapshot) throw new HttpsError('failed-precondition', 'חסרים פרטי מקבץ בהגשת תלמיד. יש לבדוק את ההגשה לפני הערכה.')
+  const ranks = new Map(preference.rankings.map((ranking) => [ranking.courseId, ranking.rank]))
+  if (preference.rankings.some((ranking) => !snapshot.courses.some((course) => course.courseId === ranking.courseId))) {
+    throw new HttpsError('failed-precondition', 'חסר שם קורס בהגשת תלמיד. יש לבדוק את ההגשה לפני הערכה.')
+  }
+  return { clusterLabel: snapshot.label.slice(0, 200), courses: snapshot.courses.map((course) => ({ courseId: course.courseId, label: course.label.slice(0, 200), ...(course.description ? { description: course.description.slice(0, 500) } : {}), rank: ranks.get(course.courseId) ?? null })) }
 }
 
 function latestSubmitted(submissions: PreferenceSubmission[]): PreferenceSubmission[] {
@@ -160,7 +172,9 @@ const geminiSecret = defineSecret('GEMINI_API_KEY')
 export const generateAiEvaluations = onCall({ ...callableOptions, secrets: [geminiSecret], timeoutSeconds: 540 }, async (request) => {
   const actor = await actorFromRequest(request)
   requireCapability(actor, 'nativ.ai.review')
-  const cycleId = requiredString(inputRecord(request.data), 'cycleId')
+  const input = inputRecord(request.data)
+  const cycleId = requiredString(input, 'cycleId')
+  const refresh = input.refresh === true
   const [cycleSnapshot, submissionsSnapshot] = await Promise.all([
     firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)).get(),
     firestore.collection(organizationCollectionPath(actor.organizationId, 'submissions')).where('cycleId', '==', cycleId).get(),
@@ -170,11 +184,17 @@ export const generateAiEvaluations = onCall({ ...callableOptions, secrets: [gemi
   const submissions = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission)).sort((a, b) => a.id.localeCompare(b.id))
   if (!submissions.length) throw new HttpsError('failed-precondition', 'אין הגשות סופיות להערכה')
   const signature = createHash('sha256').update(JSON.stringify(submissions.map((entry) => [entry.id, entry.version, entry.submissionVersion]))).digest('hex')
-  const jobRef = firestore.doc(`organizations/${actor.organizationId}/aiGenerationJobs/${encodeURIComponent(cycleId)}`)
+  const jobRef = firestore.doc(`organizations/${actor.organizationId}/aiGenerationJobs/${encodeURIComponent(cycleId)}${refresh ? '-course-v2' : ''}`)
   const token = randomUUID()
+  let reviewedWorkflowVersion: number | undefined
   const cached = await firestore.runTransaction(async (transaction) => {
     const [job, workflow] = await Promise.all([transaction.get(jobRef), transaction.get(workflowRef(actor, cycleId))])
-    if (workflow.data()?.aiBatchCreatedAt) return null
+    const current = workflow.data() as WorkflowState | undefined
+    if (refresh) {
+      if (!current?.aiBatchCreatedAt || current.aiEvaluations.every((evaluation) => evaluation.raw.coursePriorities)) return null
+      if (current.assignmentRun) throw new HttpsError('failed-precondition', 'כבר נוצר שיבוץ. יש לבדוק את ההרצה לפני שינוי ההערכות.')
+      reviewedWorkflowVersion = current.version
+    } else if (current?.aiBatchCreatedAt) return null
     if (Number(job.data()?.leaseUntil ?? 0) > Date.now()) throw new HttpsError('already-exists', 'הערכת ההעדפות כבר מתבצעת. יש לרענן בעוד כמה דקות.')
     if (job.exists && job.data()?.signature !== signature) throw new HttpsError('failed-precondition', 'גרסאות ההגשה השתנו. יש לבדוק את המחזור לפני המשך ההערכה.')
     transaction.set(jobRef, { signature, token, leaseUntil: Date.now() + 600000 }, { merge: true })
@@ -190,17 +210,19 @@ export const generateAiEvaluations = onCall({ ...callableOptions, secrets: [gemi
     const deadline = Date.now() + 420000
     for (let offset = 0; offset < pending.length; offset += 12) {
       if (Date.now() > deadline) throw new Error('ההתקדמות נשמרה. יש ללחוץ שוב כדי להשלים את ההערכות שנותרו.')
-      const batch = pending.slice(offset, offset + 12).map(({ submission, preference }) => ({ submission, preference, id: randomUUID(), rationale: sanitizeRationale(preference.rationale ?? '', identities) }))
+      const batch = pending.slice(offset, offset + 12).map(({ submission, preference }) => ({ submission, preference, id: randomUUID(), rationale: sanitizeRationale(preference.rationale ?? '', identities), ...coursesForEvaluation(submission, preference) }))
       const nonempty = batch.filter((entry) => entry.rationale)
-      const results = process.env.FUNCTIONS_EMULATOR === 'true' ? nonempty.map((entry) => ({ id: entry.id, ...mockEvaluation(entry.rationale) }))
-        : nonempty.length ? await evaluateWithGemini(geminiSecret.value(), nonempty.map((entry) => ({ id: entry.id, rationale: entry.rationale, rankings: entry.preference.rankings.map((ranking) => ranking.rank) }))) : []
+      const results = process.env.FUNCTIONS_EMULATOR === 'true' ? nonempty.map((entry) => ({ id: entry.id, summary: mockEvaluation(entry.rationale).summary, courses: entry.courses.map((course) => ({ courseId: course.courseId, priority: 'neutral' as const, reason: 'פלט בדיקה מקומי; יש לבדוק ידנית את הקשר לקורס.' })) }))
+        : nonempty.length ? await evaluateWithGemini(geminiSecret.value(), nonempty.map((entry) => ({ id: entry.id, rationale: entry.rationale, clusterLabel: entry.clusterLabel, courses: entry.courses }))) : []
       const now = new Date().toISOString()
-      evaluations.push(...batch.map(({ submission, preference, id, rationale }): AiEvaluation => {
-        const result = results.find((entry) => entry.id === id) ?? { priority: 'neutral' as const, summary: 'לא נמסר נימוק; ההערכה ניטרלית.' }
+      evaluations.push(...batch.map(({ submission, preference, id, rationale, clusterLabel, courses }): AiEvaluation => {
+        const result = results.find((entry) => entry.id === id) ?? { summary: 'לא נמסר נימוק; ההערכה ניטרלית.', courses: courses.map((course) => ({ courseId: course.courseId, priority: 'neutral' as const, reason: 'לא נמסר נימוק לקורס זה.' })) }
+        const coursePriorities = result.courses.map((course) => ({ ...course, reason: sanitizeRationale(course.reason, identities) || 'יש לבדוק את הקשר בין ההסבר לקורס.' }))
+        const priority = coursePriorities.some((course) => course.priority === 'high') ? 'high' : coursePriorities.some((course) => course.priority === 'medium') ? 'medium' : 'neutral'
         return { id, anonymousStudentRef: 'anon-' + id, studentId: submission.studentId, clusterId: preference.clusterId,
           sourceSubmissionId: submission.id, sourceSubmissionVersion: submission.submissionVersion,
-          input: { rankings: preference.rankings, ...(rationale ? { rationale } : {}) },
-          raw: { priority: result.priority, summary: sanitizeRationale(result.summary, identities), model: process.env.FUNCTIONS_EMULATOR === 'true' ? 'local-mock-v1' : rationale ? GEMINI_MODEL : 'neutral-no-rationale', evaluatedAt: now } }
+          input: { rankings: preference.rankings, clusterLabel, courses, ...(rationale ? { rationale } : {}) },
+          raw: { priority, summary: sanitizeRationale(result.summary, identities) || 'יש לבדוק את ההסבר לפני אישור ההערכה.', coursePriorities, model: process.env.FUNCTIONS_EMULATOR === 'true' ? 'local-mock-v2' : rationale ? GEMINI_MODEL : 'neutral-no-rationale', evaluatedAt: now } }
       }))
       await firestore.runTransaction(async (transaction) => {
         const job = await transaction.get(jobRef)
@@ -214,8 +236,14 @@ export const generateAiEvaluations = onCall({ ...callableOptions, secrets: [gemi
       if (currentCycle.data()?.version !== cycle.version || job.data()?.token !== token) throw new HttpsError('aborted', 'המחזור השתנה. יש לרענן לפני המשך העבודה.')
       const now = new Date().toISOString()
       const current = snapshot.exists ? snapshot.data() as WorkflowState : emptyWorkflow(actor, cycleId, now)
-      if (current.aiBatchCreatedAt) return current
-      const next = { ...current, version: current.version + 1, aiBatchCreatedAt: now, aiEvaluations: evaluations, updatedAt: now, updatedBy: actor.uid, history: history(current, actor, 'ai.batch.generated', 'הערכות ההעדפות הוכנו לבדיקת הרכז', now) }
+      if (refresh && current.version !== reviewedWorkflowVersion) throw new HttpsError('aborted', 'הערכות ההעדפות השתנו בזמן ההכנה. יש לרענן לפני ניסיון נוסף.')
+      if (refresh ? !current.aiBatchCreatedAt || current.aiEvaluations.every((evaluation) => evaluation.raw.coursePriorities) : Boolean(current.aiBatchCreatedAt)) return current
+      if (refresh && current.assignmentRun) throw new HttpsError('failed-precondition', 'כבר נוצר שיבוץ. יש לבדוק את ההרצה לפני שינוי ההערכות.')
+      if (refresh) {
+        const archiveRef = firestore.collection(`organizations/${actor.organizationId}/aiEvaluationArchives`).doc()
+        transaction.create(archiveRef, { cycleId, archivedAt: now, archivedBy: actor.uid, previousBatchCreatedAt: current.aiBatchCreatedAt, evaluations: current.aiEvaluations })
+      }
+      const next = { ...current, version: current.version + 1, aiBatchCreatedAt: now, aiEvaluations: evaluations, updatedAt: now, updatedBy: actor.uid, history: history(current, actor, refresh ? 'ai.batch.refreshed' : 'ai.batch.generated', refresh ? 'ההערכות הישנות נשמרו בארכיון ונוצרו המלצות לפי קורסים' : 'הערכות ההעדפות הוכנו לבדיקת הרכז', now) }
       transaction.set(reference, next)
       transaction.update(jobRef, { leaseUntil: 0, completedAt: now })
       return next
@@ -240,14 +268,33 @@ export const approveAiEvaluation = onCall(callableOptions, async (request) => {
   if (!['high', 'medium', 'neutral'].includes(priority)) throw new HttpsError('invalid-argument', 'עדיפות AI אינה תקינה')
   const summary = requiredString(data, 'summary')
   const reason = requiredString(data, 'reason')
+  const submittedCoursePriorities = data.coursePriorities
   const now = new Date().toISOString()
   return firestore.runTransaction(async (transaction) => {
     const reference = workflowRef(actor, cycleId)
     const snapshot = await transaction.get(reference)
     if (!snapshot.exists) throw new HttpsError('not-found', 'לא נמצאה הערכת AI')
     const current = snapshot.data() as WorkflowState
-    const evaluations = current.aiEvaluations.map((evaluation) => evaluation.id === evaluationId ? { ...evaluation, approved: { priority, summary, reason, approvedAt: now, approvedBy: actor.uid } } : evaluation)
-    if (!evaluations.some((evaluation) => evaluation.id === evaluationId)) throw new HttpsError('not-found', 'ההערכה לא נמצאה')
+    const target = current.aiEvaluations.find((evaluation) => evaluation.id === evaluationId)
+    if (!target) throw new HttpsError('not-found', 'ההערכה לא נמצאה')
+    let coursePriorities: { courseId: string; priority: AiPriority }[] | undefined
+    if (target.raw.coursePriorities) {
+      const expected = new Set(target.raw.coursePriorities.map((entry) => entry.courseId))
+      if (!Array.isArray(submittedCoursePriorities) || submittedCoursePriorities.length !== expected.size) throw new HttpsError('invalid-argument', 'יש לבדוק את העדיפות לכל קורס במקבץ')
+      const seen = new Set<string>()
+      coursePriorities = submittedCoursePriorities.map((value) => {
+        const entry = inputRecord(value)
+        const courseId = requiredString(entry, 'courseId')
+        const coursePriority = requiredString(entry, 'priority') as AiPriority
+        if (!expected.has(courseId) || seen.has(courseId) || !['high', 'medium', 'neutral'].includes(coursePriority)) throw new HttpsError('invalid-argument', 'העדיפות לאחד הקורסים אינה תקינה')
+        if (target.input.courses?.find((course) => course.courseId === courseId)?.rank === null && coursePriority !== 'neutral') throw new HttpsError('invalid-argument', 'לא ניתן לתת עדיפות לקורס שלא דורג')
+        seen.add(courseId)
+        return { courseId, priority: coursePriority }
+      })
+      const derivedPriority = coursePriorities.some((entry) => entry.priority === 'high') ? 'high' : coursePriorities.some((entry) => entry.priority === 'medium') ? 'medium' : 'neutral'
+      if (priority !== derivedPriority) throw new HttpsError('invalid-argument', 'סיכום העדיפות אינו תואם את העדיפויות לקורסים')
+    }
+    const evaluations = current.aiEvaluations.map((evaluation) => evaluation.id === evaluationId ? { ...evaluation, approved: { priority, summary, reason, approvedAt: now, approvedBy: actor.uid, ...(coursePriorities ? { coursePriorities } : {}) } } : evaluation)
     const next = { ...current, aiEvaluations: evaluations, version: current.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(current, actor, 'ai.evaluation.approved', reason, now) }
     transaction.set(reference, next)
     return next
@@ -275,7 +322,13 @@ export const runAssignment = onCall(callableOptions, async (request) => {
   const catalog = cycleCatalogSnapshot.data() as CycleCatalogSnapshot | undefined
   const submissions = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission))
   const profiles = await studentAssignmentProfiles(actor.organizationId, submissions.map((submission) => submission.studentId))
-  const students: AssignmentStudent[] = submissions.map((submission) => { const profile = profiles.get(submission.studentId); return { studentId: submission.studentId, displayLabel: profile?.displayLabel ?? 'תלמיד', classId: profile?.classId, classLabel: profile?.classLabel, submission, approvedAiByCluster: Object.fromEntries(workflow.aiEvaluations.filter((evaluation) => evaluation.studentId === submission.studentId && evaluation.approved).map((evaluation) => [evaluation.clusterId, evaluation.approved!.priority])) } })
+  const students: AssignmentStudent[] = submissions.map((submission) => {
+    const profile = profiles.get(submission.studentId)
+    const approved = workflow.aiEvaluations.filter((evaluation) => evaluation.studentId === submission.studentId && evaluation.approved)
+    return { studentId: submission.studentId, displayLabel: profile?.displayLabel ?? 'תלמיד', classId: profile?.classId, classLabel: profile?.classLabel, submission,
+      approvedAiByCluster: Object.fromEntries(approved.filter((evaluation) => !evaluation.approved?.coursePriorities).map((evaluation) => [evaluation.clusterId, evaluation.approved!.priority])),
+      approvedAiByCourse: Object.fromEntries(approved.flatMap((evaluation) => evaluation.approved?.coursePriorities?.map((course) => [course.courseId, course.priority] as const) ?? [])) }
+  })
   if (!catalog || courses.some(course=>!catalog.clusters.some(c=>c.clusterId===course.clusterId))) throw new HttpsError('failed-precondition', 'חסרות הגדרות מקבצים. יש לבדוק את התהליך לפני שיבוץ.')
   const clusterIds = [...new Set(courses.map((course) => course.clusterId))]
   const scope = participationScope(data.scope, new Set(clusterIds), new Set(students.map(student=>student.studentId)), new Set(students.map(student=>student.classId).filter((id): id is string=>Boolean(id))))
@@ -583,6 +636,37 @@ export const executeAppealChange = onCall(callableOptions, async (request) => {
     return next
   })
   } catch (error) { return operationalError(String(request.auth?.token.organizationId ?? ''), 'execute_appeal_change', error) }
+})
+
+export const approveAiEvaluations = onCall(callableOptions, async (request) => {
+  const actor = await actorFromRequest(request)
+  requireCapability(actor, 'nativ.ai.review')
+  const data = inputRecord(request.data)
+  const cycleId = requiredString(data, 'cycleId')
+  const mode = requiredString(data, 'mode')
+  const expectedVersion = requiredInteger(data, 'expectedVersion')
+  if (mode !== 'clear_only' && mode !== 'all') throw new HttpsError('invalid-argument', 'מצב האישור אינו תקין')
+  const now = new Date().toISOString()
+  return firestore.runTransaction(async (transaction) => {
+    const reference = workflowRef(actor, cycleId)
+    const cycleReference = firestore.doc(cycleDocumentPath(actor.organizationId, cycleId))
+    const [snapshot, cycleSnapshot] = await Promise.all([transaction.get(reference), transaction.get(cycleReference)])
+    const cycle = cycleSnapshot.data() as AssignmentCycle | undefined
+    if (!cycle || !['choice_closed', 'assignment'].includes(cycle.status)) throw new HttpsError('failed-precondition', 'אפשר לאשר הערכות רק אחרי סגירת הבחירה ולפני פרסום השיבוץ')
+    if (!snapshot.exists) throw new HttpsError('not-found', 'לא נמצאו הערכות לאישור')
+    const current = snapshot.data() as WorkflowState
+    if (current.version !== expectedVersion) throw new HttpsError('aborted', 'הערכות ההעדפות השתנו. רעננו ובדקו שוב לפני אישור מרוכז.')
+    if (!current.aiBatchCreatedAt || !current.aiEvaluations.length) throw new HttpsError('failed-precondition', 'ההערכות טרם הוכנו. יש ליצור אותן לפני האישור.')
+    if (current.assignmentRun) throw new HttpsError('failed-precondition', 'כבר נוצרה הרצת שיבוץ. יש לבדוק אותה לפני אישור הערכות נוספות.')
+    const selected = current.aiEvaluations.filter((evaluation) => !evaluation.approved && (mode === 'all' || !needsIndividualAiReview(evaluation)))
+    if (!selected.length) throw new HttpsError('failed-precondition', 'אין הערכות מתאימות לאישור במצב שנבחר')
+    const ids = new Set(selected.map((evaluation) => evaluation.id))
+    const evaluations = current.aiEvaluations.map((evaluation) => ids.has(evaluation.id) ? { ...evaluation, approved: { priority: evaluation.raw.priority, summary: evaluation.raw.summary, reason: mode === 'all' ? 'אישור מרוכז של הרכז' : 'אישור מרוכז לאחר סינון מקרים לבדיקה', approvedAt: now, approvedBy: actor.uid,
+      ...(evaluation.raw.coursePriorities ? { coursePriorities: evaluation.raw.coursePriorities.map((course) => ({ courseId: course.courseId, priority: course.priority })) } : {}) } } : evaluation)
+    const next = { ...current, aiEvaluations: evaluations, version: current.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(current, actor, 'ai.evaluations.bulk_approved', `אושרו ${selected.length} הערכות באופן מרוכז`, now) }
+    transaction.set(reference, next)
+    return next
+  })
 })
 
 export const changeStudentAssignment = onCall(callableOptions, async (request) => {

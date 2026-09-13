@@ -19,6 +19,14 @@ describe('runDeterministicAssignment', () => {
     expect(first.assignments.find((entry) => entry.studentId === 'neutral')?.rank).toBe(2)
   })
 
+  it('does not transfer a rationale priority to another course in the same cluster', () => {
+    const interestedInArt = { ...student('art', 'b', 'neutral'), approvedAiByCourse: { a: 'high' as const, b: 'neutral' as const } }
+    const interestedInScience = { ...student('science', 'b', 'neutral'), approvedAiByCourse: { a: 'neutral' as const, b: 'medium' as const } }
+    const result = runDeterministicAssignment({ cycleId: 'cycle', clusterIds: ['cluster'], courses: [course('a'), course('b')], students: [interestedInArt, interestedInScience] })
+    expect(result.assignments.find((entry) => entry.courseId === 'b')).toMatchObject({ studentId: 'science', aiPriority: 'medium' })
+    expect(result.assignments.find((entry) => entry.studentId === 'art')).toMatchObject({ courseId: 'a', aiPriority: 'high' })
+  })
+
   it('places submitters before students who did not submit', () => {
     const result = runDeterministicAssignment({ cycleId: 'cycle', clusterIds: ['cluster'], courses: [course('a'), course('b')], students: [student('submitted', 'a', 'neutral'), { studentId: 'none', displayLabel: 'none' }] })
     expect(result.assignments.find((entry) => entry.studentId === 'submitted')?.courseId).toBe('a')

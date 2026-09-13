@@ -130,16 +130,20 @@ export async function getWorkflow(cycleId: string, view?: 'student' | 'coordinat
   return (await httpsCallable<Record<string, unknown>, WorkflowState>(functionsClient(), 'getWorkflow')({ cycleId, ...(view ? { view } : {}) })).data
 }
 
-export async function generateAiEvaluations(cycleId: string): Promise<WorkflowState> {
-  return (await httpsCallable<{ cycleId: string }, WorkflowState>(functionsClient(), 'generateAiEvaluations', { timeout: 540000 })({ cycleId })).data
+export async function generateAiEvaluations(cycleId: string, refresh = false): Promise<WorkflowState> {
+  return (await httpsCallable<{ cycleId: string; refresh: boolean }, WorkflowState>(functionsClient(), 'generateAiEvaluations', { timeout: 540000 })({ cycleId, refresh })).data
 }
 
 export async function getStudentRoster(cycleId: string): Promise<import('../domain/studentRoster').StudentRosterEntry[]> {
   return (await httpsCallable<{ cycleId: string }, import('../domain/studentRoster').StudentRosterEntry[]>(functionsClient(), 'getStudentRoster')({ cycleId })).data
 }
 
-export async function approveAiEvaluation(cycleId: string, evaluationId: string, priority: AiPriority, summary: string): Promise<WorkflowState> {
-  return (await httpsCallable<Record<string, unknown>, WorkflowState>(functionsClient(), 'approveAiEvaluation')({ cycleId, evaluationId, priority, summary, reason: 'בדיקה ואישור של רכז השיבוץ' })).data
+export async function approveAiEvaluation(cycleId: string, evaluationId: string, priority: AiPriority, summary: string, coursePriorities?: { courseId: string; priority: AiPriority }[]): Promise<WorkflowState> {
+  return (await httpsCallable<Record<string, unknown>, WorkflowState>(functionsClient(), 'approveAiEvaluation')({ cycleId, evaluationId, priority, summary, ...(coursePriorities ? { coursePriorities } : {}), reason: 'בדיקה ואישור של רכז השיבוץ' })).data
+}
+
+export async function approveAiEvaluations(cycleId: string, mode: 'clear_only' | 'all', expectedVersion: number): Promise<WorkflowState> {
+  return (await httpsCallable<{ cycleId: string; mode: 'clear_only' | 'all'; expectedVersion: number }, WorkflowState>(functionsClient(), 'approveAiEvaluations')({ cycleId, mode, expectedVersion })).data
 }
 
 export async function runAssignment(cycleId: string, label = 'הרצת שיבוץ', scope?: AssignmentParticipationScope): Promise<WorkflowState> {

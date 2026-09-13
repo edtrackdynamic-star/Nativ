@@ -13,6 +13,8 @@ const config = await fn.json()
 if (config.state !== 'ACTIVE' || !config.serviceConfig?.secretEnvironmentVariables?.some((entry) => entry.key === 'GEMINI_API_KEY')) throw new Error('Gemini function is not active with the expected secret binding.')
 const roster = await fetch('https://cloudfunctions.googleapis.com/v2/projects/edtrack-development/locations/europe-west1/functions/getStudentRoster', { headers })
 if (!roster.ok || (await roster.json()).state !== 'ACTIVE') throw new Error('Student roster function is not active.')
+const bulkApproval = await fetch('https://cloudfunctions.googleapis.com/v2/projects/edtrack-development/locations/europe-west1/functions/approveAiEvaluations', { headers })
+if (!bulkApproval.ok || (await bulkApproval.json()).state !== 'ACTIVE') throw new Error('Bulk AI approval function is not active.')
 const origin = 'https://edtrack-nativ.web.app'
 const localHtml = await readFile(new URL('../dist/index.html', import.meta.url), 'utf8')
 const liveHtml = await (await fetch(origin, { cache: 'no-store' })).text()
@@ -26,4 +28,4 @@ for (const asset of assets) {
   const hash = (value) => createHash('sha256').update(value).digest('hex')
   if (hash(local) !== hash(remote)) throw new Error('Live asset differs from the approved build.')
 }
-console.log(JSON.stringify({ hosting: origin, assetsVerified: assets.length, geminiFunction: 'ACTIVE', secretBinding: 'GEMINI_API_KEY', rosterFunction: 'ACTIVE' }))
+console.log(JSON.stringify({ hosting: origin, assetsVerified: assets.length, geminiFunction: 'ACTIVE', secretBinding: 'GEMINI_API_KEY', rosterFunction: 'ACTIVE', bulkApprovalFunction: 'ACTIVE' }))

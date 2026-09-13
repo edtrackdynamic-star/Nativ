@@ -23,7 +23,7 @@ import { syncInstructorAccess } from './instructorAccess'
 
 const service = new NativCommandService(new FirestoreNativRepository(firestore))
 
-export { changeStudentAssignment, rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, listAssignmentRuns, publishAssignments, recommendAppeal, runAssignment, selectAssignmentRun, submitAppeal } from './workflowCallables'
+export { changeStudentAssignment, rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAiEvaluations, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, listAssignmentRuns, publishAssignments, recommendAppeal, runAssignment, selectAssignmentRun, submitAppeal } from './workflowCallables'
 export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
 export { deliverNativMail } from './mailDelivery'
 export { getStudentRoster } from './studentRoster'

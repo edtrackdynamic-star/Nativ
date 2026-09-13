@@ -9,9 +9,9 @@ export interface AiEvaluation {
   clusterId: string
   sourceSubmissionId: string
   sourceSubmissionVersion: number
-  input: { rankings: { courseId: string; rank: number }[]; rationale?: string }
-  raw: { priority: AiPriority; summary: string; model: string; evaluatedAt: string }
-  approved?: { priority: AiPriority; summary: string; approvedAt: string; approvedBy: string; reason: string }
+  input: { rankings: { courseId: string; rank: number }[]; rationale?: string; clusterLabel?: string; courses?: { courseId: string; label: string; description?: string; rank: number | null }[] }
+  raw: { priority: AiPriority; summary: string; model: string; evaluatedAt: string; coursePriorities?: { courseId: string; priority: AiPriority; reason: string }[] }
+  approved?: { priority: AiPriority; summary: string; approvedAt: string; approvedBy: string; reason: string; coursePriorities?: { courseId: string; priority: AiPriority }[] }
 }
 
 export interface AssignmentRun {

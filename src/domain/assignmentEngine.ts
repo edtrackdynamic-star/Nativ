@@ -11,6 +11,7 @@ export interface AssignmentStudent {
   classLabel?: string
   submission?: { preferences: ClusterPreference[] }
   approvedAiByCluster?: Record<string, AiPriority>
+  approvedAiByCourse?: Record<string, AiPriority>
   previouslyCompletedLogicalCourseIds?: string[]
 }
 
@@ -42,6 +43,8 @@ export interface AssignmentRunResult {
 }
 
 const priorityValue: Record<AiPriority, number> = { high: 3, medium: 2, neutral: 1 }
+const priorityForCourse = (student: AssignmentStudent, clusterId: string, courseId: string): AiPriority =>
+  student.approvedAiByCourse?.[courseId] ?? student.approvedAiByCluster?.[clusterId] ?? 'neutral'
 
 function deterministicKey(value: string): string {
   let hash = 2166136261
@@ -87,7 +90,7 @@ export function runDeterministicAssignment(input: {
     const classDifference = (left: AssignmentStudent, right: AssignmentStudent, course: Course) => left.classId && right.classId ? classCount(left, course) - classCount(right, course) : 0
     const allowed = (student: AssignmentStudent, course: Course) => isRepeatAllowed(course, student) && !constraints.some((constraint) => constraint.studentId === student.studentId && constraint.courseId === course.id && constraint.type === 'must_not_assign')
     const add = (student: AssignmentStudent, course: Course, rank: number | null, source: AssignmentResult['source'], explanation: string) => {
-      assignments.push({ studentId: student.studentId, clusterId, courseId: course.id, rank, source, aiPriority: student.approvedAiByCluster?.[clusterId] ?? 'neutral', explanation })
+      assignments.push({ studentId: student.studentId, clusterId, courseId: course.id, rank, source, aiPriority: priorityForCourse(student, clusterId, course.id), explanation })
       enrollmentByCourse[course.id] += 1
       if (student.classId) classEnrollmentByCourse[course.id][student.classId] = (classEnrollmentByCourse[course.id][student.classId] ?? 0) + 1
       assigned.add(student.studentId)
@@ -113,7 +116,7 @@ export function runDeterministicAssignment(input: {
           const candidateCount = candidates.length
           for (let index = 0; index < available && candidates.length; index += 1) {
             candidates.sort((left, right) => {
-              const priorityDifference = priorityValue[right.approvedAiByCluster?.[clusterId] ?? 'neutral'] - priorityValue[left.approvedAiByCluster?.[clusterId] ?? 'neutral']
+              const priorityDifference = priorityValue[priorityForCourse(right, clusterId, course.id)] - priorityValue[priorityForCourse(left, clusterId, course.id)]
               const balanceDifference = balanceByClass ? classDifference(left, right, course) : 0
               return priorityDifference || balanceDifference || deterministicKey(`${clusterId}|${course.id}|${rank}|${phase}|${left.studentId}`).localeCompare(deterministicKey(`${clusterId}|${course.id}|${rank}|${phase}|${right.studentId}`))
             })
