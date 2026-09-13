@@ -322,6 +322,23 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .inline-document-link { display: inline; padding: 0; border: 0; background: none; color: var(--form-accent, #1b5b94); text-decoration: underline; font: inherit; cursor: pointer; }
 .choice-deadline { padding: 14px 18px; border-radius: 12px; background: #e8f4f8; color: #17445c; font-weight: 700; }
 .choice-deadline.expired { background: #fff0ea; color: #8c2f17; }
+.choice-submit-hint { margin-top: 20px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; background: #f5f9fd; line-height: 1.6; }
+.choice-submit-hint p { margin: 0; }
+.choice-submit-hint ul { margin: 8px 0 0; padding-inline-start: 24px; }
+.choice-submit-hint a { color: var(--brand-blue, #155a91); text-decoration: underline; }
+.submitted-choices { display: grid; gap: 18px; }
+.submitted-school-brand { display: inline-flex; align-items: center; min-height: 54px; }
+.submitted-school-logo { width: 190px; max-width: 100%; height: 72px; object-fit: contain; object-position: right center; }
+.submitted-choices-heading { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 12px; }
+.submitted-choices-heading h2 { margin: 6px 0 0; }
+.submitted-choices > p { margin: 0; }
+.submitted-at { color: var(--ink-muted); }
+.submitted-choices-list { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+.submitted-cluster { border: 1px solid var(--line); border-radius: 16px; padding: 18px; background: #f8fafc; }
+.submitted-cluster h3 { margin: 0 0 12px; }
+.submitted-cluster ol { margin: 0; padding-inline-start: 26px; line-height: 1.9; }
+.submitted-rationale { margin-bottom: 0; white-space: pre-wrap; }
+.choice-pending-draft,.choice-edit-closed { padding: 12px 16px; border-radius: 12px; background: #fff4e8; color: #693e12; }
 .deadline-settings { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; margin-block: 16px; background: #fff; }
 .deadline-settings label { display: grid; gap: 6px; }
 .deadline-settings p { flex-basis: 100%; margin: 0; }

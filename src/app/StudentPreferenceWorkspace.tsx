@@ -1,9 +1,10 @@
 import { ChoiceForm } from './ChoiceForm'
-import { rankingsComplete } from './preferenceState'
+import { SubmittedChoices } from './SubmittedChoices'
+import { missingSubmissionRequirements, rankingsComplete } from './preferenceState'
 import { useUnsavedChanges } from './interaction'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChoiceContext } from '../application/NativCommandService'
-import type { ClusterPreference } from '../domain/preferences'
+import type { ClusterPreference, PreferenceSubmission } from '../domain/preferences'
 import type { AssignmentCycle } from '../domain/cycle'
 import { choiceAcceptsResponses, choiceDeadlinePassed } from '../domain/choiceDeadline'
 import { formatIsraelDateTime } from './israelDateTime'
@@ -26,6 +27,8 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
   const [workflow, setWorkflow] = useState<WorkflowState | null>(null)
   const [preferences, setPreferences] = useState<ClusterPreference[]>([])
   const [submissionCount, setSubmissionCount] = useState(0)
+  const [latestSubmission, setLatestSubmission] = useState<PreferenceSubmission | null>(null)
+  const [editing, setEditing] = useState(false)
   const [message, setMessage] = useState('טוען את טופס הבחירה…')
   const initialized = useRef(false)
   const alive = useRef(true)
@@ -53,6 +56,8 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
       .then(([choiceContext, submissions, loadedCycle, loadedWorkflow]) => {
         if (!alive.current) return
         const latest = [...submissions].filter((entry) => entry.status === 'submitted').sort((a,b) => b.submissionVersion - a.submissionVersion)[0]
+        setLatestSubmission(latest ?? null)
+        setEditing(false)
         setSubmittedSignature(latest ? JSON.stringify(latest.preferences) : '')
         const draft = submissions.find((submission) => submission.status === 'draft')
         setContext(choiceContext)
@@ -72,7 +77,7 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
         setHasSavedDraft(Boolean(draft))
         setDraftSavedAt(draft?.updatedAt ?? '')
         setSubmissionCount(latest?.submissionVersion ?? 0)
-        setMessage(loadedCycle.status === 'choice_open' ? (draft ? 'הטיוטה האחרונה נטענה.' : 'אפשר להתחיל לדרג. הטופס יישמר אוטומטית.') : 'טופס הבחירה המקורי נשמר לקריאה; מוצג גם מצב השיבוץ העדכני.')
+        setMessage(loadedCycle.status === 'choice_open' ? (draft ? 'הטיוטה האחרונה נטענה.' : 'אפשר להתחיל לדרג. הטופס יישמר אוטומטית.') : '')
         initialized.current = true
       })
       .catch(() => { if (alive.current) setMessage('טעינת הטופס נכשלה. יש לרענן ולנסות שוב.') })
@@ -91,7 +96,9 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
   const isSubmitted = Boolean(submittedSignature && signature === submittedSignature)
   useUnsavedChanges(Boolean(context) && (signature !== savedSignature || saving || submitting))
   const complete = useMemo(() => rankingsComplete(context?.catalog.clusters ?? [], preferences), [context, preferences])
+  const missingRequirements = useMemo(() => missingSubmissionRequirements(context?.catalog.clusters ?? [], preferences), [context, preferences])
   const deadlinePassed = Boolean(cycle && choiceDeadlinePassed(cycle, now))
+  const canEdit = Boolean(cycle && !readOnly && choiceAcceptsResponses(cycle, now))
 
   const saveDraftNow = useCallback(async () => {
     if (saveInFlight.current) return saveInFlight.current
@@ -127,13 +134,13 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
   }, [cycleId])
 
   useEffect(() => {
-    if (readOnly || submitting || !initialized.current || !context?.catalog.clusters.length || !cycle || !choiceAcceptsResponses(cycle, now) || saving || signature === lastSavedSignature.current || signature === failedSignature) return
+    if (readOnly || (latestSubmission && !editing) || submitting || !initialized.current || !context?.catalog.clusters.length || !cycle || !choiceAcceptsResponses(cycle, now) || saving || signature === lastSavedSignature.current || signature === failedSignature) return
     const timer = window.setTimeout(() => {
       if (!alive.current || saveInFlight.current) return
       void saveDraftNow().catch(() => undefined)
     }, 1600)
     return () => window.clearTimeout(timer)
-  }, [context, cycle, cycleId, signature, saving, submitting, readOnly, failedSignature, now, saveDraftNow])
+  }, [context, cycle, cycleId, signature, saving, submitting, readOnly, latestSubmission, editing, failedSignature, now, saveDraftNow])
 
   async function saveManually() {
     if (readOnly || saving || submitting || !cycle || !choiceAcceptsResponses(cycle, new Date().toISOString())) return
@@ -141,7 +148,7 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
   }
 
   async function submit() {
-    if (!complete || busy.current || readOnly || isSubmitted || !cycle || !choiceAcceptsResponses(cycle, new Date().toISOString())) return
+    if (!complete || missingRequirements.length || busy.current || readOnly || isSubmitted || !cycle || !choiceAcceptsResponses(cycle, new Date().toISOString())) return
     busy.current = true
     let draftSaved = false
     try {
@@ -153,6 +160,8 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
       draftSaved = true
       const submitted = await submitPreferenceDraft(cycleId, draftVersionRef.current, submissionCount + 1)
       if (!alive.current) return
+      setLatestSubmission(submitted)
+      setEditing(false)
       setSubmittedSignature(JSON.stringify(submitted.preferences))
       setSubmissionCount(submitted.submissionVersion)
       setMessage('הטופס הוגש בהצלחה והבחירות נשמרו.')
@@ -173,7 +182,7 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
 
   if (!context || !cycle || !workflow) return <section className="workspace-card"><p aria-live="polite">{message}</p></section>
 
-  if (cycle.status !== 'choice_open') {
+  if (['published', 'appeals', 'closed'].includes(cycle.status)) {
     const assignments = workflow.assignmentRun?.assignments ?? []
     const selectedCluster = context.catalog.clusters.find((cluster) => cluster.clusterId === appealDraft.clusterId)
     const currentCourseId = assignments.find((entry) => entry.clusterId === appealDraft.clusterId)?.courseId
@@ -193,7 +202,16 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
     </section>
   }
 
+  if (latestSubmission && (!editing || !canEdit)) {
+    const editClosedReason = readOnly ? 'הצפייה בחשבון זה היא לקריאה בלבד.' : deadlinePassed ? 'מועד עריכת הבחירות הסתיים. אם הרכז יאריך את מועד ההגשה, אפשר יהיה לערוך שוב.' : cycle.status === 'assignment' ? 'השיבוץ החל, ולכן אי אפשר עוד לשנות את הבחירות.' : 'תקופת הבחירה נסגרה, ולכן אי אפשר עוד לשנות את הבחירות.'
+    return <section className="workspace-card"><SubmittedChoices clusters={latestSubmission.catalogSnapshot} preferences={latestSubmission.preferences} submittedAt={latestSubmission.submittedAt} canEdit={canEdit} onEdit={() => setEditing(true)} editClosedReason={editClosedReason} pendingDraft={signature !== submittedSignature} schoolName={schoolName} schoolLogo={schoolLogo} /></section>
+  }
+
   if (!context.catalog.clusters.length) return <section className="workspace-card"><h2>הבחירות שלי</h2><p>אין מקבצים פתוחים לכיתתך בתהליך הזה. לבדיקת שיוך הכיתה אפשר לפנות לרכז.</p></section>
+
+  if (cycle.status !== 'choice_open' || deadlinePassed) return <section className="workspace-card"><h2>הבחירות שלי</h2><p>{deadlinePassed ? 'מועד ההגשה הסתיים.' : cycle.status === 'assignment' ? 'השיבוץ כבר החל.' : 'תקופת הבחירה נסגרה.'} לא הוגשו בחירות במחזור הזה. פנו לרכז אם דרוש סיוע.</p></section>
+
+  const submitHint = submitting ? <p>מגיש את הבחירות…</p> : isSubmitted ? <p>הבחירות האלה כבר הוגשו.</p> : readOnly ? <p>הצפייה בחשבון זה היא לקריאה בלבד.</p> : !complete || missingRequirements.length ? <><p>כדי להגיש, השלימו את הפרטים הבאים:</p><ul>{missingRequirements.map((issue, index) => <li key={`${issue.clusterId}-${index}`}><a href={`#choice-cluster-${issue.clusterId}`}>{issue.message}</a></li>)}</ul></> : <p>כל הבחירות הושלמו. אפשר להגיש את הטופס.</p>
 
   return (
     <section className="workspace-card" aria-label="טופס בחירה">
@@ -205,7 +223,7 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
       {cycle.choiceDeadlineEnabled && cycle.choiceClosesAt && <p className={`choice-deadline ${deadlinePassed ? 'expired' : ''}`} role="status">{deadlinePassed ? 'מועד ההגשה הסתיים' : 'ניתן להגיש עד'}: {formatIsraelDateTime(cycle.choiceClosesAt)}{deadlinePassed && '. הבחירות שהוגשו נשמרו. אם המועד יוארך, תוכלו להמשיך לאחר רענון.'}</p>}
       <p className="draft-save-status" role="status" aria-live="polite">{saving ? 'שומר טיוטה…' : failedSignature === signature ? `שמירת הטיוטה נכשלה: ${saveError}. הבחירות נשארו במסך; תקנו את הבעיה ונסו לשמור שוב.` : signature !== savedSignature ? 'יש שינויים שטרם נשמרו.' : isSubmitted ? 'הבחירות הוגשו ונשמרו.' : hasSavedDraft ? `הטיוטה נשמרה${draftSavedAt ? ` · ${formatIsraelDateTime(draftSavedAt)}` : ''}.` : 'הבחירות טרם נשמרו כטיוטה.'}</p>
       <p>{preferences.reduce((sum, entry) => sum + entry.rankings.filter((ranking) => ranking.courseId).length, 0)} מתוך {context.catalog.clusters.reduce((sum, entry) => sum + entry.requiredRankingCount, 0)} בחירות הושלמו</p>
-      <ChoiceForm clusters={context.catalog.clusters} design={context.catalog.formDesign} preferences={preferences} onChange={(next) => { preferencesRef.current = next; setPreferences(next) }} onOpenDocument={()=>void downloadCycleDocument(cycle.id).catch(()=>setMessage('פתיחת המסמך נכשלה. בקשו מהרכז לבדוק את הקובץ.'))} schoolName={schoolName} schoolLogo={schoolLogo} onSubmit={()=>void submit()} onSaveDraft={()=>void saveManually()} disabled={readOnly || submitting || deadlinePassed} saveDisabled={readOnly || saving || submitting || deadlinePassed} submitDisabled={!complete || submitting || isSubmitted || readOnly || deadlinePassed} />
+      <ChoiceForm clusters={context.catalog.clusters} design={context.catalog.formDesign} preferences={preferences} onChange={(next) => { preferencesRef.current = next; setPreferences(next) }} onOpenDocument={()=>void downloadCycleDocument(cycle.id).catch(()=>setMessage('פתיחת המסמך נכשלה. בקשו מהרכז לבדוק את הקובץ.'))} schoolName={schoolName} schoolLogo={schoolLogo} onSubmit={()=>void submit()} onSaveDraft={()=>void saveManually()} disabled={readOnly || submitting || deadlinePassed} saveDisabled={readOnly || saving || submitting || deadlinePassed} submitDisabled={!complete || Boolean(missingRequirements.length) || submitting || isSubmitted || readOnly || deadlinePassed} submitHint={submitHint} />
       <div className="workspace-actions">
         <span>{isSubmitted ? 'הבחירות המוצגות הוגשו ונשמרו' : submissionCount ? 'יש להגיש מחדש כדי לעדכן את הבחירות שהוגשו' : 'הבחירות טרם הוגשו'}</span>
       </div>

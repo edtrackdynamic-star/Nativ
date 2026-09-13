@@ -1,10 +1,11 @@
 import type { ClusterPreference, ClusterSnapshot } from '../domain/preferences'
 import { defaultFormDesign, type FormDesign } from '../domain/formDesign'
 import { SchoolBrand } from '../components/SchoolBrand'
+import type { ReactNode } from 'react'
 
-export function ChoiceForm({ clusters, design = defaultFormDesign, preferences, onChange, onSubmit, onSaveDraft, onOpenDocument, schoolName, schoolLogo, disabled = false, saveDisabled = false, submitDisabled = false, preview = false }: {
+export function ChoiceForm({ clusters, design = defaultFormDesign, preferences, onChange, onSubmit, onSaveDraft, onOpenDocument, schoolName, schoolLogo, disabled = false, saveDisabled = false, submitDisabled = false, submitHint, preview = false }: {
   clusters: ClusterSnapshot[]; design?: FormDesign; preferences: ClusterPreference[];
-  onChange: (value: ClusterPreference[]) => void; onSubmit: () => void; onSaveDraft?: () => void; onOpenDocument?: () => void; schoolName?: string; schoolLogo?: string; disabled?: boolean; saveDisabled?: boolean; submitDisabled?: boolean; preview?: boolean;
+  onChange: (value: ClusterPreference[]) => void; onSubmit: () => void; onSaveDraft?: () => void; onOpenDocument?: () => void; schoolName?: string; schoolLogo?: string; disabled?: boolean; saveDisabled?: boolean; submitDisabled?: boolean; submitHint?: ReactNode; preview?: boolean;
 }) {
   const form = { ...defaultFormDesign, ...design }
   const documentAvailable = form.documentLinkVisible && Boolean(form.documentUrl || (form.documentStoragePath && onOpenDocument))
@@ -27,7 +28,7 @@ export function ChoiceForm({ clusters, design = defaultFormDesign, preferences, 
     </header>
     <fieldset className="workspace-boundary" disabled={disabled}><div className="choice-clusters">{clusters.map(cluster => {
       const preference = preferences.find(p => p.clusterId === cluster.clusterId)
-      return <section className="choice-cluster" key={cluster.clusterId}>
+      return <section className="choice-cluster" id={`choice-cluster-${cluster.clusterId}`} key={cluster.clusterId}>
         <h3>{cluster.label}</h3>{cluster.description && <p className="formatted-text">{cluster.description}</p>}
         <div className="course-options">{cluster.courses.map(course => <article className="course-option" key={course.courseId}>
           {course.imageUrl && <img src={course.imageUrl} alt="" />}
@@ -41,6 +42,6 @@ export function ChoiceForm({ clusters, design = defaultFormDesign, preferences, 
         </div>
         {cluster.rationaleMode !== 'hidden' && <label className="rationale-field">{cluster.rationaleMode === 'required' ? 'הסבר לבחירה (חובה)' : 'רוצה לספר לנו על הבחירה? (רשות)'}<textarea rows={3} maxLength={4000} required={cluster.rationaleMode==='required'} value={preference?.rationale ?? ''} onChange={event => update(cluster.clusterId,{rationale:event.target.value})} /></label>}
       </section>
-    })}</div><div className="choice-form-actions">{onSaveDraft && <button className="secondary-action" type="button" disabled={saveDisabled} onClick={onSaveDraft}>שמירת טיוטה</button>}<button className="primary-action form-submit" type="submit" disabled={submitDisabled}>{preview ? 'התנסות בהגשה' : form.submitLabel}</button></div></fieldset>
+    })}</div>{submitHint && <div className="choice-submit-hint" id="choice-submit-hint" role="status" aria-live="polite">{submitHint}</div>}<div className="choice-form-actions">{onSaveDraft && <button className="secondary-action" type="button" disabled={saveDisabled} onClick={onSaveDraft}>שמירת טיוטה</button>}<button className="primary-action form-submit" type="submit" aria-describedby={submitHint ? 'choice-submit-hint' : undefined} disabled={submitDisabled}>{preview ? 'התנסות בהגשה' : form.submitLabel}</button></div></fieldset>
   </form>
 }
