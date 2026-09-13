@@ -14,14 +14,20 @@ const key = Buffer.from(secret.payload.data, 'base64').toString('utf8')
 const bundled = await build({ entryPoints: ['server/gemini/evaluation.ts'], bundle: true, platform: 'node', format: 'esm', write: false })
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`
 const { evaluateWithGemini } = await import(moduleUrl)
-const results = await evaluateWithGemini(key, [{
-  id: 'synthetic-choice',
-  rationale: 'אני אוהבת ליצור ולצייר ורוצה ללמוד טכניקות חדשות בציור.',
-  clusterLabel: 'מקבץ קורסי בחירה',
-  courses: [
-    { courseId: 'synthetic-art', label: 'ציור ואמנות', description: 'רישום, צבע ויצירה חזותית', rank: 1 },
-    { courseId: 'synthetic-science', label: 'ניסויים במדעים', description: 'חקר מדעי וניסויי מעבדה', rank: 2 },
-  ],
-}])
-if (results.length !== 1 || results[0].courses.length !== 2) throw new Error('Unexpected course evaluation result.')
-console.log(JSON.stringify({ model: 'gemini-2.5-flash', structuredOutput: 'passed', courseIds: results[0].courses.map((course) => course.courseId), priorities: results[0].courses.map((course) => course.priority), realStudentDataSent: false }))
+const courses = [
+  { courseId: 'synthetic-art', label: 'אמנות בקרטון', description: 'יצירת אמנות מקרטון ומחומרים יומיומיים', rank: 1 },
+  { courseId: 'synthetic-science', label: 'ניסויים במדעים', description: 'חקר מדעי וניסויי מעבדה', rank: 2 },
+]
+const results = await evaluateWithGemini(key, [
+  { id: 'general-interest', rationale: 'אני אוהבת יצירה ואמנות', clusterLabel: 'מקבץ קורסי בחירה', courses },
+  { id: 'concrete-goal', rationale: 'בניתי דגמים מקרטון בבית ואני רוצה ללמוד איך לתכנן מבנה יציב שלא קורס.', clusterLabel: 'מקבץ קורסי בחירה', courses },
+])
+const general = results.find((entry) => entry.id === 'general-interest')
+const concrete = results.find((entry) => entry.id === 'concrete-goal')
+if (!general || !concrete || general.courses.length !== 2 || concrete.courses.length !== 2) throw new Error('Unexpected course evaluation result.')
+if (general.courses.find((entry) => entry.courseId === 'synthetic-art')?.priority !== 'medium'
+  || general.courses.find((entry) => entry.courseId === 'synthetic-science')?.priority !== 'neutral'
+  || concrete.courses.find((entry) => entry.courseId === 'synthetic-art')?.priority !== 'high') {
+  throw new Error(`Course rubric mismatch: ${JSON.stringify({ general: general.courses.map((entry) => entry.priority), concrete: concrete.courses.map((entry) => entry.priority) })}`)
+}
+console.log(JSON.stringify({ model: 'gemini-2.5-flash', structuredOutput: 'passed', general: general.courses.map((entry) => entry.priority), concrete: concrete.courses.map((entry) => entry.priority), realStudentDataSent: false }))

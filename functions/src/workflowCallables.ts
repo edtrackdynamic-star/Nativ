@@ -184,14 +184,18 @@ export const generateAiEvaluations = onCall({ ...callableOptions, secrets: [gemi
   const submissions = latestSubmitted(submissionsSnapshot.docs.map((document) => document.data() as PreferenceSubmission)).sort((a, b) => a.id.localeCompare(b.id))
   if (!submissions.length) throw new HttpsError('failed-precondition', 'אין הגשות סופיות להערכה')
   const signature = createHash('sha256').update(JSON.stringify(submissions.map((entry) => [entry.id, entry.version, entry.submissionVersion]))).digest('hex')
-  const jobRef = firestore.doc(`organizations/${actor.organizationId}/aiGenerationJobs/${encodeURIComponent(cycleId)}${refresh ? '-course-v2' : ''}`)
+  const sourceBatch = refresh ? (await workflowRef(actor, cycleId).get()).data() as WorkflowState | undefined : undefined
+  if (refresh && !sourceBatch?.aiBatchCreatedAt) throw new HttpsError('failed-precondition', 'אין הערכות קיימות להכנה מחדש. יש ליצור תחילה הערכות.')
+  if (refresh && sourceBatch?.assignmentRun) throw new HttpsError('failed-precondition', 'כבר נוצר שיבוץ. יש לבדוק את ההרצה לפני שינוי ההערכות.')
+  const refreshKey = sourceBatch?.aiBatchCreatedAt ? `-rubric-v3-${createHash('sha256').update(`${sourceBatch.aiBatchCreatedAt}:${sourceBatch.version}`).digest('hex').slice(0, 16)}` : ''
+  const jobRef = firestore.doc(`organizations/${actor.organizationId}/aiGenerationJobs/${encodeURIComponent(cycleId)}${refresh ? refreshKey : ''}`)
   const token = randomUUID()
   let reviewedWorkflowVersion: number | undefined
   const cached = await firestore.runTransaction(async (transaction) => {
     const [job, workflow] = await Promise.all([transaction.get(jobRef), transaction.get(workflowRef(actor, cycleId))])
     const current = workflow.data() as WorkflowState | undefined
     if (refresh) {
-      if (!current?.aiBatchCreatedAt || current.aiEvaluations.every((evaluation) => evaluation.raw.coursePriorities)) return null
+      if (!current?.aiBatchCreatedAt || current.aiBatchCreatedAt !== sourceBatch?.aiBatchCreatedAt) throw new HttpsError('aborted', 'ההערכות השתנו מאז תחילת ההכנה. יש לרענן לפני ניסיון נוסף.')
       if (current.assignmentRun) throw new HttpsError('failed-precondition', 'כבר נוצר שיבוץ. יש לבדוק את ההרצה לפני שינוי ההערכות.')
       reviewedWorkflowVersion = current.version
     } else if (current?.aiBatchCreatedAt) return null
@@ -237,13 +241,14 @@ export const generateAiEvaluations = onCall({ ...callableOptions, secrets: [gemi
       const now = new Date().toISOString()
       const current = snapshot.exists ? snapshot.data() as WorkflowState : emptyWorkflow(actor, cycleId, now)
       if (refresh && current.version !== reviewedWorkflowVersion) throw new HttpsError('aborted', 'הערכות ההעדפות השתנו בזמן ההכנה. יש לרענן לפני ניסיון נוסף.')
-      if (refresh ? !current.aiBatchCreatedAt || current.aiEvaluations.every((evaluation) => evaluation.raw.coursePriorities) : Boolean(current.aiBatchCreatedAt)) return current
+      if (refresh && (!current.aiBatchCreatedAt || current.aiBatchCreatedAt !== sourceBatch?.aiBatchCreatedAt)) throw new HttpsError('aborted', 'ההערכות השתנו בזמן ההכנה. יש לרענן לפני ניסיון נוסף.')
+      if (!refresh && current.aiBatchCreatedAt) return current
       if (refresh && current.assignmentRun) throw new HttpsError('failed-precondition', 'כבר נוצר שיבוץ. יש לבדוק את ההרצה לפני שינוי ההערכות.')
       if (refresh) {
         const archiveRef = firestore.collection(`organizations/${actor.organizationId}/aiEvaluationArchives`).doc()
         transaction.create(archiveRef, { cycleId, archivedAt: now, archivedBy: actor.uid, previousBatchCreatedAt: current.aiBatchCreatedAt, evaluations: current.aiEvaluations })
       }
-      const next = { ...current, version: current.version + 1, aiBatchCreatedAt: now, aiEvaluations: evaluations, updatedAt: now, updatedBy: actor.uid, history: history(current, actor, refresh ? 'ai.batch.refreshed' : 'ai.batch.generated', refresh ? 'ההערכות הישנות נשמרו בארכיון ונוצרו המלצות לפי קורסים' : 'הערכות ההעדפות הוכנו לבדיקת הרכז', now) }
+      const next = { ...current, version: current.version + 1, aiBatchCreatedAt: now, aiEvaluations: evaluations, updatedAt: now, updatedBy: actor.uid, history: history(current, actor, refresh ? 'ai.batch.refreshed' : 'ai.batch.generated', refresh ? 'ההערכות הישנות נשמרו בארכיון ונוצרו המלצות מעודכנות לפי קורסים' : 'הערכות ההעדפות הוכנו לבדיקת הרכז', now) }
       transaction.set(reference, next)
       transaction.update(jobRef, { leaseUntil: 0, completedAt: now })
       return next

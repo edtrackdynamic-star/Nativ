@@ -128,6 +128,11 @@ describe('Nativ callable system flow', () => {
     workflow = (await generate({ cycleId: demoCycle.id, refresh: true })).data
     expect(workflow.aiEvaluations.every((entry) => entry.raw.coursePriorities?.length === entry.input.courses?.length)).toBe(true)
     expect((await getFirestore(adminApp).collection(`organizations/${demoCycle.organizationId}/aiEvaluationArchives`).get()).size).toBe(1)
+    const courseBatchIds = workflow.aiEvaluations.map((entry) => entry.id)
+    workflow = (await generate({ cycleId: demoCycle.id, refresh: true })).data
+    expect(workflow.aiEvaluations.map((entry) => entry.id)).not.toEqual(courseBatchIds)
+    expect(workflow.aiEvaluations.every((entry) => entry.raw.coursePriorities?.length === entry.input.courses?.length)).toBe(true)
+    expect((await getFirestore(adminApp).collection(`organizations/${demoCycle.organizationId}/aiEvaluationArchives`).get()).size).toBe(2)
 
     const approveGroup = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'approveAiEvaluations')
     const previousVersion = workflow.version
