@@ -290,8 +290,8 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .manual-proposal label { display: grid; gap: 6px; }
 .manual-proposal input,.manual-proposal select,.manual-proposal textarea { width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 11px; background: #fff; }
 .manual-proposal .primary-action { justify-self: start; }
-.result-overlay { position: fixed; inset: 0; z-index: 1000; padding: 24px; background: rgba(18,38,64,.55); }
-.result-dialog { display: flex; flex-direction: column; gap: 16px; max-width: 1300px; max-height: 100%; margin: auto; padding: 22px; border-radius: 22px; background: #fff; box-shadow: 0 20px 70px rgba(5,30,61,.25); }
+.result-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; padding: 24px; background: rgba(18,38,64,.55); }
+.result-dialog { display: flex; flex-direction: column; gap: 16px; width: min(100%, 1500px); max-height: 100%; min-height: 0; margin: auto; padding: 22px; border-radius: 22px; background: #fff; box-shadow: 0 20px 70px rgba(5,30,61,.25); }
 .result-dialog-head { display: flex; justify-content: space-between; align-items: start; gap: 15px; }
 .result-dialog-head h3 { margin: 4px 0; }
 .result-dialog-head p { margin: 0; color: var(--ink-muted); }
@@ -302,14 +302,28 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
 .result-controls label { display: grid; gap: 4px; min-width: 180px; }
 .result-controls input,.result-controls select { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; }
 .result-downloads { display: flex; flex-wrap: wrap; gap: 8px; }
-.result-groups { overflow: auto; display: grid; align-content: start; gap: 10px; }
-.result-groups details { border: 1px solid var(--line); border-radius: 13px; overflow: hidden; }
-.result-groups summary { display: flex; justify-content: space-between; gap: 12px; padding: 14px; cursor: pointer; font-weight: 800; background: #f4f8fc; }
-.result-groups summary span { color: var(--ink-muted); font-weight: 500; }
-.result-table { max-height: 48vh; overflow: auto; }
-.result-table table { width: 100%; border-collapse: collapse; }
-.result-table th,.result-table td { padding: 10px; border-bottom: 1px solid var(--line); text-align: start; }
-.result-table th { position: sticky; top: 0; background: #fff; }
+.result-groups { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; }
+.result-groups > * { margin-block: 0 14px; }
+.result-course,.result-class,.result-issues { border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+.result-course > header,.result-class > header { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding: 14px 18px; background: #f4f8fc; }
+.result-course h4,.result-class h4 { margin: 3px 0; }
+.result-course header p { margin: 3px 0 0; color: var(--ink-muted); }
+.result-course header strong,.result-class header span { white-space: nowrap; color: #17558d; }
+.result-place-editor { display: flex; align-items: end; flex-wrap: wrap; gap: 9px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+.result-place-editor label { display: grid; gap: 5px; min-width: 240px; flex: 1; }
+.result-place-editor input { border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.result-place-editor p { width: 100%; margin: 0; color: #9a3412; }
+.result-issues { padding: 12px 16px; background: #fff8eb; }
+.result-issues summary { cursor: pointer; font-weight: 700; }
+.result-issues li { margin-top: 7px; }
+.result-table-wrap { max-width: 100%; overflow-x: auto; }
+.result-table-wrap table { width: 100%; min-width: 560px; border-collapse: collapse; }
+.result-table-wrap th,.result-table-wrap td { min-width: 100px; padding: 11px 14px; border-bottom: 1px solid var(--line); text-align: start; vertical-align: top; }
+.result-table-wrap thead th { background: #eef5fb; color: #173f64; white-space: normal; }
+.result-table-wrap th small,.result-table-wrap td small { display: block; margin-top: 3px; color: var(--ink-muted); font-size: .82em; font-weight: 400; }
+.result-table-wrap td[data-status="no_form"],.result-table-wrap td[data-status="unassigned"],.result-table-wrap td[data-status="excluded"] { color: #8c4d14; }
+.result-table-wrap td[data-status="not_applicable"] { color: var(--ink-muted); }
+.result-empty { padding: 0 18px 14px; color: var(--ink-muted); }
 .appeal-deadline-control,.appeal-decision-controls,.student-appeal-status { padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: #f8fbff; }
 .appeal-deadline-control h4 { margin: 0 0 5px; }
 .appeal-deadline-control p { color: var(--ink-muted); }
@@ -349,14 +363,9 @@ main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 70
   .result-controls { display: grid; align-items: stretch; }
   .result-controls > div { justify-content: space-between; }
   .result-controls button { padding: 8px; }
-  .result-table table,.result-table tbody,.result-table tr,.result-table td { display: block; }
-  .result-table thead { display: none; }
-  .result-table tr { padding: 10px 14px; border-bottom: 1px solid var(--line); }
-  .result-table td { border: 0; padding: 3px 0; }
-  .result-table td:nth-child(1) { font-weight: 800; }
-  .result-table td:nth-child(3)::before { content: 'מקבץ: '; }
-  .result-table td:nth-child(4)::before { content: 'קורס: '; }
-  .result-table td:nth-child(5)::before { content: 'דירוג: '; }
+  .result-course > header,.result-class > header { display: block; }
+  .result-course header strong { display: block; margin-top: 7px; white-space: normal; }
+  .result-table-wrap table { min-width: 680px; }
 }
 .login-shell main { max-width: 500px; }
 .login-shell .topbar { justify-content: center; padding-block: 40px 12px; }

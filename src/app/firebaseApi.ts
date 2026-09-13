@@ -59,7 +59,7 @@ export async function createCycle(schoolYear: string, termLabel: string): Promis
   return (await httpsCallable<Record<string, unknown>, AssignmentCycle>(functionsClient(), 'createCycle')({ schoolYear, termLabel })).data
 }
 
-export interface CatalogCourseDraft { capacityLimit?: number; documentUrl?: string; imageUrl?: string; label: string; description: string; subjectArea: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: 'allowed' | 'approval_required' | 'discouraged' | 'prohibited' }
+export interface CatalogCourseDraft { capacityLimit?: number; documentUrl?: string; imageUrl?: string; meetingPlace?: string; label: string; description: string; subjectArea: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: 'allowed' | 'approval_required' | 'discouraged' | 'prohibited' }
 export interface CatalogClusterDraft { capacityFlexibility?: number; eligibleClassIds?: string[]; weeklySlot?: import('../domain/weeklySlot').WeeklySlot; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass: boolean; courses: CatalogCourseDraft[] }
 export async function saveCycleCatalog(cycleId: string, clusters: CatalogClusterDraft[], formDesign?: import('../domain/formDesign').FormDesign, expectedVersion?: number): Promise<void> {
   await httpsCallable<Record<string, unknown>, unknown>(functionsClient(), 'saveCycleCatalog')({ cycleId, clusters, ...(formDesign ? { formDesign } : {}), ...(expectedVersion === undefined ? {} : {expectedVersion}) })
@@ -73,6 +73,9 @@ export async function listEligibleClasses(): Promise<Array<{ id: string; name: s
 export interface CycleCatalogData { catalog: import('../domain/catalog').CycleCatalogSnapshot | null; courses: import('../domain/catalog').Course[] }
 export async function getCycleCatalog(cycleId: string): Promise<CycleCatalogData> {
   return (await httpsCallable<{cycleId: string}, CycleCatalogData>(functionsClient(), 'getCycleCatalog')({cycleId})).data
+}
+export async function updateCourseMeetingPlace(cycleId: string, courseId: string, meetingPlace: string, expectedVersion: number): Promise<import('../domain/catalog').Course> {
+  return (await httpsCallable<{cycleId:string;courseId:string;meetingPlace:string;expectedVersion:number}, import('../domain/catalog').Course>(functionsClient(), 'updateCourseMeetingPlace')({cycleId,courseId,meetingPlace,expectedVersion})).data
 }
 
 export async function setChoiceDeadline(cycleId: string, expectedVersion: number, choiceClosesAt: string | null): Promise<AssignmentCycle> {

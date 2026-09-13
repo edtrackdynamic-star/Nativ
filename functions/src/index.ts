@@ -143,7 +143,7 @@ export const setAppealDeadline = onCall(callableOptions, async request => {
   } catch (error) { return operationalError(String(request.auth?.token.organizationId ?? ''), 'set_appeal_deadline', error) }
 })
 
-interface CatalogCourseInput { capacityLimit?: number; documentUrl?: string; imageUrl?: string; label: string; description?: string; subjectArea?: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: RepeatPolicy }
+interface CatalogCourseInput { capacityLimit?: number; documentUrl?: string; imageUrl?: string; meetingPlace?: string; label: string; description?: string; subjectArea?: string; instructorIds: string[]; minimum: number; target: number; maximum: number; repeatPolicy: RepeatPolicy }
 interface CatalogClusterInput { capacityFlexibility?: number; eligibleClassIds?: string[]; weeklySlot?: import('../../src/domain/weeklySlot').WeeklySlot; description?: string; rationaleMode?: 'optional' | 'required' | 'hidden'; label: string; requiredRankingCount: number; balanceByClass?: boolean; courses: CatalogCourseInput[] }
 
 export const saveCycleCatalog = onCall(callableOptions, async (request) => {
@@ -185,10 +185,11 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
       const courseLabel = typeof course.label === 'string' ? course.label.trim() : ''
       const instructorIds = Array.isArray(course.instructorIds) ? course.instructorIds.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())) : []
       if (!courseLabel || !instructorIds.length || ![course.minimum, course.target, course.maximum].every(Number.isInteger) || course.minimum < 0 || course.minimum > course.target || course.target > course.maximum) throw new HttpsError('invalid-argument', `יש להשלים מנחה וקיבולת תקינה בקורס ${courseLabel || 'ללא שם'}`)
+      if (course.meetingPlace !== undefined && (typeof course.meetingPlace !== 'string' || course.meetingPlace.length > 120)) throw new HttpsError('invalid-argument', 'מקום המפגש יכול להכיל עד 120 תווים')
       if (!['allowed', 'approval_required', 'discouraged', 'prohibited'].includes(course.repeatPolicy)) throw new HttpsError('invalid-argument', 'מדיניות החזרה אינה תקינה')
       if(course.maximum<1)throw new HttpsError('invalid-argument','מקסימום התלמידים חייב להיות חיובי')
       const courseId = `course-${randomUUID()}`
-      courses.push({ ...base, id: courseId, cycleId, clusterId, logicalCourseId: courseId, label: courseLabel, description: String(course.description ?? '').trim().slice(0,4000), documentUrl:safeLink(course.documentUrl,true), imageUrl:safeLink(course.imageUrl), subjectArea: String(course.subjectArea ?? '').trim(), instructorIds, slot: `slot-${clusterIndex + 1}`, eligibleGradeIds: [], capacity: { ...(course.capacityLimit === undefined ? {} : {limit: course.capacityLimit}), minimum: course.minimum, target: course.target, maximum: course.maximum }, repeatPolicy: course.repeatPolicy, published: true })
+      courses.push({ ...base, id: courseId, cycleId, clusterId, logicalCourseId: courseId, label: courseLabel, description: String(course.description ?? '').trim().slice(0,4000), documentUrl:safeLink(course.documentUrl,true), imageUrl:safeLink(course.imageUrl), ...(course.meetingPlace?.trim() ? {meetingPlace:course.meetingPlace.trim()} : {}), subjectArea: String(course.subjectArea ?? '').trim(), instructorIds, slot: `slot-${clusterIndex + 1}`, eligibleGradeIds: [], capacity: { ...(course.capacityLimit === undefined ? {} : {limit: course.capacityLimit}), minimum: course.minimum, target: course.target, maximum: course.maximum }, repeatPolicy: course.repeatPolicy, published: true })
       return { courseId, logicalCourseId: courseId, label: courseLabel, description:String(course.description??'').trim().slice(0,4000), documentUrl:safeLink(course.documentUrl,true), imageUrl:safeLink(course.imageUrl), instructorNames:instructorIds.map(id=>teachers.get(id)!) }
     })
     if(cluster.rationaleMode && !['optional','required','hidden'].includes(cluster.rationaleMode))throw new HttpsError('invalid-argument','מצב שדה ההסבר אינו תקין')
@@ -210,6 +211,39 @@ export const saveCycleCatalog = onCall(callableOptions, async (request) => {
     transaction.create(firestore.collection(`organizations/${actor.organizationId}/nativAuditEvents`).doc(), { id: randomUUID(), organizationId: actor.organizationId, actorId: actor.uid, occurredAt: now, action: 'catalog.saved', entityType: 'AssignmentCycle', entityId: cycleId, reason: `שמירת ${catalogClusters.length} מקבצים ו-${courses.length} קורסים`, beforeVersion: cycle.version, afterVersion: cycle.version + 1 })
     return catalog
   })
+})
+
+export const updateCourseMeetingPlace = onCall(callableOptions, async (request) => {
+  try {
+  const actor = await actorFromRequest(request)
+  if (!actor.capabilities.includes('nativ.assignment.manage')) throw new HttpsError('permission-denied', 'אין הרשאה לעדכן מקום מפגש')
+  const data = inputRecord(request.data)
+  const cycleId = requiredString(data, 'cycleId')
+  const courseId = requiredString(data, 'courseId')
+  if (typeof data.meetingPlace !== 'string' || data.meetingPlace.length > 120) throw new HttpsError('invalid-argument', 'מקום המפגש יכול להכיל עד 120 תווים')
+  if (!Number.isSafeInteger(data.expectedVersion)) throw new HttpsError('invalid-argument', 'יש לרענן את פרטי הקורס לפני השמירה')
+  const meetingPlace = data.meetingPlace.trim()
+  const now = new Date().toISOString()
+  return firestore.runTransaction(async transaction => {
+    const cycleRef = firestore.doc(cycleDocumentPath(actor.organizationId, cycleId))
+    const catalogRef = firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId))
+    const [cycleSnapshot, catalogSnapshot] = await transaction.getAll(cycleRef, catalogRef)
+    if (!cycleSnapshot.exists) throw new HttpsError('not-found', 'מחזור השיבוץ לא נמצא')
+    if ((cycleSnapshot.data() as AssignmentCycle).status === 'closed') throw new HttpsError('failed-precondition', 'המחזור סגור; אי אפשר לשנות את מקום המפגש')
+    const source = catalogSnapshot.data() as { courses?: Course[] } | undefined
+    const courses = source?.courses ?? []
+    const index = courses.findIndex(course => course.id === courseId)
+    if (index < 0) throw new HttpsError('not-found', 'הקורס לא נמצא במחזור זה')
+    const before = courses[index]
+    if (before.version !== data.expectedVersion) throw new HttpsError('aborted', 'פרטי הקורס השתנו. רעננו את המסך ונסו שוב')
+    const updated: Course = { ...before, version: before.version + 1, updatedAt: now, updatedBy: actor.uid, ...(meetingPlace ? { meetingPlace } : {}) }
+    if (!meetingPlace) delete updated.meetingPlace
+    const next = courses.map((course, courseIndex) => courseIndex === index ? updated : course)
+    transaction.set(catalogRef, { ...source, courses: next, updatedAt: now, updatedBy: actor.uid })
+    transaction.create(firestore.collection(`organizations/${actor.organizationId}/nativAuditEvents`).doc(), { id: randomUUID(), organizationId: actor.organizationId, actorId: actor.uid, occurredAt: now, action: 'course.meeting_place.updated', entityType: 'Course', entityId: courseId, reason: meetingPlace ? 'מקום מפגש עודכן' : 'מקום מפגש הוסר', beforeVersion: before.version, afterVersion: updated.version })
+    return updated
+  })
+  } catch (error) { return operationalError(String(request.auth?.token.organizationId ?? ''), 'update_course_meeting_place', error) }
 })
 
 export const listEligibleClasses = onCall(callableOptions, async (request) => {

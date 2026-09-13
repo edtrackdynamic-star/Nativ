@@ -30,6 +30,7 @@ export interface Course extends VersionedEntity {
   imageUrl?: string
   description: string
   subjectArea: string
+  meetingPlace?: string
   instructorIds: string[]
   slot: string
   eligibleGradeIds: string[]

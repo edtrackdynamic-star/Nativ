@@ -6,6 +6,7 @@ import { connectAuthEmulator, getAuth, signInWithEmailAndPassword, signOut, type
 import { connectFunctionsEmulator, getFunctions, httpsCallable, type Functions } from 'firebase/functions'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { AssignmentCycle } from '../../src/domain/cycle'
+import type { Course } from '../../src/domain/catalog'
 import type { PreferenceSubmission } from '../../src/domain/preferences'
 import type { WorkflowState } from '../../src/domain/workflow'
 import { demoCatalogSnapshot, demoCourses, demoCycle, demoSubmission } from '../../src/demo/demoCycle'
@@ -99,11 +100,16 @@ describe('Nativ callable system flow', () => {
     await expect(httpsCallable<Record<string,unknown>,unknown>(functions,'uploadCycleDocument')({cycleId:demoCycle.id,fileName:'courses.docx',base64:'UEs='})).rejects.toMatchObject({code:'functions/permission-denied'})
     const listRuns = httpsCallable<{cycleId:string},unknown[]>(functions,'listAssignmentRuns')
     await expect(listRuns({cycleId:demoCycle.id})).rejects.toMatchObject({code:'functions/permission-denied'})
+    await expect(httpsCallable<Record<string,unknown>,unknown>(functions,'updateCourseMeetingPlace')({cycleId:demoCycle.id,courseId:demoCourses[0].id,meetingPlace:'חדר אמנות',expectedVersion:demoCourses[0].version})).rejects.toMatchObject({code:'functions/permission-denied'})
 
     await signOut(auth)
     const coordinator = accounts.find((account) => account.label === 'רכז שיבוץ')
     if (!coordinator) throw new Error('חשבון הרכז לא נוצר')
     await signInWithEmailAndPassword(auth, coordinator.email, coordinator.password)
+    const updateMeetingPlace = httpsCallable<Record<string,unknown>,Course>(functions,'updateCourseMeetingPlace')
+    const placed = (await updateMeetingPlace({cycleId:demoCycle.id,courseId:demoCourses[0].id,meetingPlace:'חדר אמנות',expectedVersion:demoCourses[0].version})).data
+    expect(placed.meetingPlace).toBe('חדר אמנות')
+    await expect(updateMeetingPlace({cycleId:demoCycle.id,courseId:demoCourses[0].id,meetingPlace:'חדר אחר',expectedVersion:demoCourses[0].version})).rejects.toMatchObject({code:'functions/aborted'})
     const updated = (await transition({
       cycleId: demoCycle.id,
       expectedVersion: 1,
