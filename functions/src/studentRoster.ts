@@ -2,7 +2,7 @@ import { getAuth } from 'firebase-admin/auth'
 import { onCall, HttpsError } from 'firebase-functions/v2/https'
 import type { PreferenceSubmission } from '../../src/domain/preferences'
 import type { WorkflowState } from '../../src/domain/workflow'
-import type { StudentRosterEntry } from '../../src/domain/studentRoster'
+import type { StudentChoiceDetails, StudentRosterEntry } from '../../src/domain/studentRoster'
 import { callableOptions, coreFirestore, nativFirestore } from './firebase'
 import { actorFromRequest, inputRecord, requiredString } from './request'
 import { studentAssignmentProfiles } from './workflowCallables'
@@ -52,4 +52,16 @@ export const getStudentRoster = onCall(callableOptions, async (request) => {
       choices: submission?.preferences.flatMap((entry) => entry.rankings.map((ranking) => ({ clusterId: entry.clusterId, ...ranking }))) ?? [], assignments }
   })
   return students.sort((a, b) => a.classLabel.localeCompare(b.classLabel, 'he') || a.name.localeCompare(b.name, 'he'))
+})
+
+export const getStudentChoiceDetails = onCall(callableOptions, async (request): Promise<StudentChoiceDetails | null> => {
+  const actor = await actorFromRequest(request, 'read')
+  if (!actor.capabilities.includes('nativ.assignment.manage')) throw new HttpsError('permission-denied', 'הבחירות האישיות זמינות לרכזי השיבוץ בלבד')
+  const data = inputRecord(request.data)
+  const cycleId = requiredString(data, 'cycleId')
+  const studentId = requiredString(data, 'studentId')
+  const snapshots = await nativFirestore.collection(organizationCollectionPath(actor.organizationId, 'submissions')).where('cycleId', '==', cycleId).where('studentId', '==', studentId).get()
+  const latest = snapshots.docs.map(entry => entry.data() as PreferenceSubmission).filter(entry => entry.status === 'submitted').sort((a, b) => b.submissionVersion - a.submissionVersion)[0]
+  if (!latest) return null
+  return { submittedAt: latest.submittedAt, submissionVersion: latest.submissionVersion, preferences: latest.preferences, catalogSnapshot: latest.catalogSnapshot }
 })

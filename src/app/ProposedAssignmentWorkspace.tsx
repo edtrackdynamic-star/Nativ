@@ -2,7 +2,6 @@ import type { Course, CycleCatalogSnapshot } from '../domain/catalog'
 import type { AssignmentRun, WorkflowState } from '../domain/workflow'
 import { runReadiness } from '../domain/runReadiness'
 import { AssignmentScenarioPlanner } from './AssignmentScenarioPlanner'
-import { ManualProposedAssignment } from './ManualProposedAssignment'
 import { ResultExplorer } from './ResultExplorer'
 
 function WarningSummary({ run, clusterLabels }: { run: AssignmentRun; clusterLabels: Record<string, string> }) {
@@ -25,8 +24,7 @@ export function ProposedAssignmentWorkspace({ cycleId, workflow, courses, catalo
     {run ? <>
       <div className="proposed-overview"><div><span className="eyebrow">ההצעה הפעילה</span><h3>{run.label ?? 'הרצת שיבוץ'}</h3><p>{run.approvedAt ? 'אושרה וממתינה לפרסום' : 'ממתינה לבדיקה ולאישור'}</p></div><div className="proposed-metrics"><div><strong>{readiness?.assigned}/{readiness?.required}</strong><span>שיבוצים</span></div><div><strong>{readiness?.missing}</strong><span>ללא מקום</span></div><div><strong>{readiness?.firstChoices}/{readiness?.assigned}</strong><span>בחירה ראשונה</span></div><div><strong>{readiness?.excluded}</strong><span>החרגות</span></div></div></div>
       {readiness?.issues.length ? <div className="run-blocker" role="alert"><h4>יש להשלים את השיבוץ לפני אישור</h4>{readiness.issues.map(issue => <p key={issue}>{issue}</p>)}<WarningSummary run={run} clusterLabels={clusterLabels} /></div> : <p className="run-ready" role="status">כל המשתתפים שנכללו בהרצה שובצו. אפשר לעיין בתוצאות ולאשר.</p>}
-      <ResultExplorer cycleId={cycleId} run={run} courses={courses} catalog={catalog} placeEditable={placeEditable} />
-      {!run.approvedAt && <details className="proposed-tool"><summary>תיקון שיבוץ ידני בהצעה</summary><ManualProposedAssignment cycleId={cycleId} workflow={workflow} courses={courses} clusterLabels={clusterLabels} readOnly={readOnly} onWorkflow={onWorkflow} /></details>}
+      <ResultExplorer cycleId={cycleId} run={run} workflow={workflow} onWorkflow={onWorkflow} courses={courses} catalog={catalog} placeEditable={placeEditable} />
       <div className="workspace-actions proposed-decision">{!run.approvedAt ? <button type="button" className="primary-action" disabled={readOnly || pending || Boolean(readiness?.issues.length)} onClick={onApprove}>אישור ההרצה הפעילה</button> : <button type="button" className="primary-action" disabled={readOnly || pending || Boolean(readiness?.issues.length)} onClick={onPublish}>פרסום השיבוץ לתלמידים ולמורים</button>}{readiness?.issues.length ? <span>הפרסום ייפתח לאחר השלמת כל השיבוצים הכלולים.</span> : null}</div>
       {!run.publishedAt && <details className="proposed-tool"><summary>דחיית ההצעה</summary><label>סיבה לדחייה<textarea value={rejectionReason} onChange={event => onRejectionReason(event.target.value)} /></label><button type="button" className="danger-action" disabled={readOnly || pending || !rejectionReason.trim()} onClick={onReject}>דחיית ההצעה</button></details>}
     </> : <p>עדיין לא נוצר שיבוץ מוצע. בחרו מי משתתף וצרו הרצה.</p>}

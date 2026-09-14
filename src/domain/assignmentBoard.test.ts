@@ -37,4 +37,11 @@ describe('assignment board', () => {
     expect(board.issues.some(issue => issue.includes('קורס משובץ'))).toBe(true)
     expect(board.issues.some(issue => issue.includes('מספר השיבוצים'))).toBe(true)
   })
+  it('shows the rank of the current course from the original choices after an older manual change', () => {
+    const run: AssignmentRun = { ...sampleRun, assignments: [{ ...sampleRun.assignments[0], rank: 1, courseId: 'course-b', source: 'manual' }], enrollmentByCourse: { 'course-a': 0, 'course-b': 1 } }
+    const courses = [...sampleCourses, { ...sampleCourses[0], id: 'course-b', label: 'תיאטרון' }]
+    const roster = sampleRoster.map(student => student.id === 's1' ? { ...student, choices: [...student.choices, { clusterId: 'cluster-a', courseId: 'course-b', rank: 2 }] } : student)
+    const board = buildAssignmentBoard(run, roster, courses, sampleCatalog)
+    expect(board.students.find(student => student.id === 's1')?.cells['cluster-a'].assignment?.rank).toBe(2)
+  })
 })

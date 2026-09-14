@@ -24,8 +24,10 @@ export function buildAssignmentBoard(run: AssignmentRun, roster: StudentRosterEn
 
   for (const assignment of run.assignments) {
     const key = pairKey(assignment.studentId, assignment.clusterId)
+    const originalChoices = rosterById.get(assignment.studentId)?.choices.filter(choice => choice.clusterId === assignment.clusterId) ?? []
+    const displayedAssignment = originalChoices.length ? { ...assignment, rank: originalChoices.find(choice => choice.courseId === assignment.courseId)?.rank ?? null } : assignment
     if (assignmentsByPair.has(key)) issues.push(`נמצא יותר משיבוץ אחד לתלמיד/ה במקבץ ${clusterById.get(assignment.clusterId)?.label ?? assignment.clusterId}.`)
-    else assignmentsByPair.set(key, assignment)
+    else assignmentsByPair.set(key, displayedAssignment)
     if (!rosterById.has(assignment.studentId)) issues.push(`תלמיד/ה משובץ/ת אינו/ה מופיע/ה ברשימת התלמידים: ${assignment.studentLabel ?? assignment.studentId}.`)
     if (!courseById.has(assignment.courseId)) issues.push(`קורס משובץ אינו מופיע בקטלוג: ${assignment.courseId}.`)
     else if (courseById.get(assignment.courseId)?.clusterId !== assignment.clusterId) issues.push(`קורס משובץ אינו שייך למקבץ השיבוץ: ${assignment.courseId}.`)

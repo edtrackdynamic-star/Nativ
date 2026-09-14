@@ -28,7 +28,7 @@ const service = new NativCommandService(new FirestoreNativRepository(firestore))
 export { changeStudentAssignment, rejectAssignmentRun, analyzeAppeal, approveAiEvaluation, approveAiEvaluations, approveAssignmentRun, approveCapacityOverride, decideAppeal, executeAppealChange, generateAiEvaluations, getWorkflow, listAssignmentRuns, publishAssignments, recommendAppeal, runAssignment, saveManualProposedAssignment, selectAssignmentRun, submitAppeal } from './workflowCallables'
 export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
 export { deliverNativMail } from './mailDelivery'
-export { getStudentRoster } from './studentRoster'
+export { getStudentRoster, getStudentChoiceDetails } from './studentRoster'
 export { downloadCycleDocument, extractCourseDescriptions, uploadCycleDocument } from './courseDescriptionImport'
 
 function mapError(error: unknown): never {

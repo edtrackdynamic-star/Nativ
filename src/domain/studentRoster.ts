@@ -5,6 +5,12 @@ export interface StudentRosterEntry {
   choices: { clusterId: string; courseId: string; rank: number }[]
   assignments: { clusterId: string; courseId: string }[]
 }
+export interface StudentChoiceDetails {
+  submittedAt?: string
+  submissionVersion: number
+  preferences: import('./preferences').ClusterPreference[]
+  catalogSnapshot: import('./preferences').ClusterSnapshot[]
+}
 export interface RosterFilters { query: string; classId: string; courseId: string; clusterId: string; status: string; mode: 'choices' | 'assignments'; rank: string }
 export function filterStudents(students: StudentRosterEntry[], filters: RosterFilters): StudentRosterEntry[] {
   return students.filter((student) => {

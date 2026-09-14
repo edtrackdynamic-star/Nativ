@@ -59,6 +59,8 @@ describe('Nativ callable system flow', () => {
     const roster = httpsCallable<{ cycleId: string }, Array<{ id: string; classLabel: string; status: string }>>(functions, 'getStudentRoster')
     const students = (await roster({ cycleId: demoCycle.id })).data
     expect(students).toContainEqual(expect.objectContaining({ id: 'student-demo-001', classLabel: 'ז׳1', status: 'not_submitted' }))
+    const details = httpsCallable<{cycleId:string;studentId:string},import('../../src/domain/studentRoster').StudentChoiceDetails|null>(functions,'getStudentChoiceDetails')
+    expect((await details({cycleId:demoCycle.id,studentId:'student-demo-001'})).data).toBeNull()
   })
 
   it('authenticates a student, saves a canonical draft, submits it, and blocks management', async () => {
@@ -198,9 +200,14 @@ describe('Nativ callable system flow', () => {
     const savedRuns=(await listRuns({cycleId:demoCycle.id})).data
     expect(savedRuns).toHaveLength(2)
     expect(savedRuns.find(entry=>entry.label==='ללא אמנויות לתלמיד ההדגמה')?.rejectedAt).toBeTruthy()
-    const selectRun=httpsCallable<{cycleId:string;runId:string},WorkflowState>(functions,'selectAssignmentRun')
-    workflow=(await selectRun({cycleId:demoCycle.id,runId:baselineRunId})).data
+    const selectRun=httpsCallable<{cycleId:string;runId:string;expectedVersion?:number},WorkflowState>(functions,'selectAssignmentRun')
+    await expect(selectRun({cycleId:demoCycle.id,runId:baselineRunId,expectedVersion:0})).rejects.toMatchObject({code:'functions/aborted'})
+    workflow=(await selectRun({cycleId:demoCycle.id,runId:baselineRunId,expectedVersion:workflow.version})).data
     expect(workflow.assignmentRun?.assignments).toHaveLength(2)
+    const details=httpsCallable<{cycleId:string;studentId:string},import('../../src/domain/studentRoster').StudentChoiceDetails|null>(functions,'getStudentChoiceDetails')
+    const choiceDetails=(await details({cycleId:demoCycle.id,studentId:'student-demo-001'})).data
+    expect(choiceDetails?.preferences.find(entry=>entry.clusterId==='cluster-tech')?.rationale).toBe('אני רוצה לבנות ולחקור')
+    expect(choiceDetails?.catalogSnapshot).toHaveLength(2)
     const manualProposal=httpsCallable<Record<string,unknown>,WorkflowState>(functions,'saveManualProposedAssignment')
     const artsAssignment=workflow.assignmentRun!.assignments.find(entry=>entry.clusterId==='cluster-arts')!
     const alternateArts=artsAssignment.courseId==='course-theater'?'course-music':'course-theater'
@@ -308,6 +315,7 @@ describe('Nativ callable system flow', () => {
     const execute = httpsCallable<Record<string, unknown>, WorkflowState>(functions, 'executeAppealChange')
     workflow = (await execute({ cycleId: demoCycle.id, appealId: appeal.id, expectedWorkflowVersion: workflow.version })).data
     expect(workflow.assignmentRun!.assignments.find((entry) => entry.studentId === 'student-demo-001' && entry.clusterId === 'cluster-arts')!.courseId).toBe(requestedCourseId)
+    expect(workflow.assignmentRun!.assignments.find((entry) => entry.studentId === 'student-demo-001' && entry.clusterId === 'cluster-arts')!.rank).toBe(demoSubmission.preferences[0].rankings.find(entry=>entry.courseId===requestedCourseId)?.rank)
     expect(workflow.appeals.find((entry) => entry.id === appeal.id)?.status).toBe('executed')
     expect(workflow.notifications.filter((entry) => entry.audience === 'secretary')).toHaveLength(3)
     expect(workflow.notifications.filter((entry) => entry.audience === 'student' && entry.channel === 'email')).toHaveLength(0)
@@ -342,6 +350,7 @@ describe('Nativ callable system flow', () => {
     workflow = direct.workflow
     expect(direct.changeId).toMatch(/^manual-/)
     expect(workflow.assignmentRun?.assignments.find((entry) => entry.studentId === 'student-demo-001' && entry.clusterId === 'cluster-arts')?.courseId).toBe(current.courseId)
+    expect(workflow.assignmentRun?.assignments.find((entry) => entry.studentId === 'student-demo-001' && entry.clusterId === 'cluster-arts')?.rank).toBe(demoSubmission.preferences[0].rankings.find(entry=>entry.courseId===current.courseId)?.rank)
     expect((await previewChanges({ cycleId: demoCycle.id, audience: 'student' })).data.changes).toHaveLength(1)
     const staffPreview=(await previewSend({cycleId:demoCycle.id,audience:'staff'})).data
     expect(staffPreview.messages.length).toBeGreaterThan(0)
@@ -365,6 +374,8 @@ describe('Nativ callable system flow', () => {
     expect(users.length).toBeGreaterThanOrEqual(5)
     const getWorkflow = httpsCallable<{ cycleId: string }, WorkflowState>(functions, 'getWorkflow')
     await expect(getWorkflow({ cycleId: demoCycle.id })).rejects.toMatchObject({ code: 'functions/permission-denied' })
+    const details = httpsCallable<{cycleId:string;studentId:string},unknown>(functions,'getStudentChoiceDetails')
+    await expect(details({cycleId:demoCycle.id,studentId:'student-demo-001'})).rejects.toMatchObject({code:'functions/permission-denied'})
 
     const secretary = users.find((user) => user.email === 'secretary@nativ.demo')!
     const setAccess = httpsCallable<Record<string, unknown>, { roles: string[] }>(functions, 'setUserAccess')

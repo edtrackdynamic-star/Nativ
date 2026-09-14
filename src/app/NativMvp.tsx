@@ -18,6 +18,7 @@ import { requestAccessCodeLogin, claimInitialAccessManager, exchangeGoogleIdenti
 import { SecretaryWorkspace } from './SecretaryWorkspace'
 import { StudentPreferenceWorkspace } from './StudentPreferenceWorkspace'
 import { initialLoginSchoolId } from './loginSchool'
+import { readLastNavigation, saveLastNavigation } from './navigationMemory'
 
 interface SessionProfile { user: User; access: NativSessionAccess }
 const areaLabels: Partial<Record<RoleId, string>> = { student: 'הבחירות שלי', placement_coordinator: 'ניהול השיבוץ', appeal_reviewer: 'בדיקת ערעורים', access_manager: 'ניהול גישה', secretary: 'דיווחים למזכירות', course_instructor: 'הקורסים שלי' }
@@ -46,6 +47,7 @@ export function NativMvp() {
   const [cycles, setCycles] = useState<AssignmentCycle[]>([])
   const [selectedCycleId, setSelectedCycleId] = useState<string | null>(null)
   const [coordinatorPage,setCoordinatorPage] = useState<'workflow'|'form'>('form')
+  const [navigationReady, setNavigationReady] = useState(false)
   const [showArchive,setShowArchive] = useState(false)
   const visibleCycles=cycles.filter(c=>showArchive ? !isCurrentYearWindow(c.schoolYear) : isCurrentYearWindow(c.schoolYear))
   const [creatingCycle, setCreatingCycle] = useState(false)
@@ -88,6 +90,7 @@ export function NativMvp() {
       setCreatingCycle(false)
       setShowArchive(false)
       setAuthError(false)
+      setNavigationReady(false)
       if (!user) return
       setMessage('טוען את סביבת העבודה שלך…')
       void withSessionTimeout(resolveSession(user, {
@@ -101,9 +104,12 @@ export function NativMvp() {
         if (auth.currentUser?.uid !== resolvedUser.uid) return
         setAuthenticatedUser(resolvedUser)
         setSession({ user: resolvedUser, access })
-        setSelectedArea(areaOrder.find((role) => access.roles.includes(role)) ?? null)
+        const remembered = readLastNavigation(resolvedUser.uid, access.organizationId)
+        const area = remembered.area && access.roles.includes(remembered.area) ? remembered.area : areaOrder.find((role) => access.roles.includes(role)) ?? null
+        setSelectedArea(area)
+        setCoordinatorPage(remembered.coordinatorPage === 'workflow' ? 'workflow' : 'form')
         setMessage('')
-        void withSessionTimeout(listCycles()).then((loaded) => { if (authRequest.current === requestId) { setCycles(loaded); setCyclesLoading(false); setSelectedCycleId(preferredCycleId(loaded)) } }).catch(() => { if (authRequest.current === requestId) { setAuthError(true); setMessage('לא ניתן לטעון את מחזורי השיבוץ. נסו שוב.'); } })
+        void withSessionTimeout(listCycles()).then((loaded) => { if (authRequest.current === requestId) { const rememberedCycle = loaded.find(cycle => cycle.id === remembered.cycleId); setCycles(loaded); setCyclesLoading(false); setSelectedCycleId(rememberedCycle?.id ?? preferredCycleId(loaded)); setShowArchive(Boolean(rememberedCycle && !isCurrentYearWindow(rememberedCycle.schoolYear))); setNavigationReady(true) } }).catch(() => { if (authRequest.current === requestId) { setAuthError(true); setMessage('לא ניתן לטעון את מחזורי השיבוץ. נסו שוב.'); } })
       }).catch((error: unknown) => { if (authRequest.current === requestId) { ++authRequest.current; setAuthError(true); setMessage(friendlyError(error, 'לא ניתן לטעון את ההרשאות.')) } })
     })
     if (emulatorMode) void seedDemoEnvironment().then((result) => setAccounts(result.accounts)).catch(() => setMessage('סביבת הבדיקה אינה זמינה.'))
@@ -111,6 +117,10 @@ export function NativMvp() {
     // oxlint-disable-next-line react-hooks/exhaustive-deps
     return () => { ++authRequest.current; unsubscribe() }
   }, [authReload])
+  useEffect(() => {
+    if (!navigationReady || !session || !selectedArea) return
+    saveLastNavigation(session.user.uid, session.access.organizationId, { area: selectedArea, cycleId: selectedCycleId, coordinatorPage, showArchive })
+  }, [navigationReady, session, selectedArea, selectedCycleId, coordinatorPage, showArchive])
   useEffect(() => {
     let active = true
     const path = session?.access.organizationLogoPath
@@ -228,7 +238,7 @@ export function NativMvp() {
       {selectedArea === 'placement_coordinator' && !selectedCycleId && !showArchive && <fieldset className="workspace-boundary" disabled={session.access.accessMode === 'read_only'}><CycleSetupWorkspace onChanged={refreshCycles} schoolName={session.access.organizationName} schoolLogo={schoolLogo} /></fieldset>}
       {selectedArea === 'placement_coordinator' && selectedCycleId && coordinatorPage === 'form' && <fieldset className="workspace-boundary" disabled={session.access.accessMode === 'read_only'}><CycleSetupWorkspace readOnly={session.access.accessMode === 'read_only'} cycle={cycles.find((cycle) => cycle.id === selectedCycleId)} onChanged={refreshCycles} schoolName={session.access.organizationName} schoolLogo={schoolLogo} /></fieldset>}
       {selectedArea === 'student' && selectedCycleId && <fieldset className="workspace-boundary" disabled={session.access.accessMode === 'read_only'}><StudentPreferenceWorkspace cycleId={selectedCycleId} readOnly={session.access.accessMode === 'read_only'} schoolName={session.access.organizationName} schoolLogo={schoolLogo} /></fieldset>}
-      {selectedArea === 'placement_coordinator' && selectedCycleId && coordinatorPage === 'workflow' && <CoordinatorWorkflowWorkspace cycleId={selectedCycleId} onCycleChanged={refreshCycles} />}
+      {selectedArea === 'placement_coordinator' && selectedCycleId && coordinatorPage === 'workflow' && <CoordinatorWorkflowWorkspace cycleId={selectedCycleId} userId={session.user.uid} organizationId={session.access.organizationId} onCycleChanged={refreshCycles} />}
       {selectedArea === 'appeal_reviewer' && selectedCycleId && <AppealReviewerWorkspace cycleId={selectedCycleId} />}
       {selectedArea === 'access_manager' && <AccessManagerWorkspace />}
       {selectedArea === 'secretary' && selectedCycleId && <SecretaryWorkspace cycleId={selectedCycleId} />}

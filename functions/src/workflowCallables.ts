@@ -389,6 +389,7 @@ export const selectAssignmentRun = onCall(callableOptions, async request => {
     const [workflowSnapshot,runSnapshot,cycleSnapshot]=await transaction.getAll(reference,runReference,cycleReference)
     const current=workflowSnapshot.data() as WorkflowState | undefined, storedRun=runSnapshot.data() as (AssignmentRun&{cycleId?:string}) | undefined
     if (cycleSnapshot.data()?.status!=='assignment' || !current || current.assignmentRun?.publishedAt) throw new HttpsError('failed-precondition','אפשר לבחור הרצה רק לפני פרסום השיבוץ')
+    if (data.expectedVersion !== undefined && current.version !== data.expectedVersion) throw new HttpsError('aborted','השיבוץ השתנה. רעננו את התוצאות לפני בחירת גרסה אחרת.')
     if (!storedRun || storedRun.cycleId!==cycleId || storedRun.rejectedAt) throw new HttpsError('not-found','הרצת השיבוץ אינה זמינה לבחירה')
     const run=assignmentRunFromStorage(storedRun)
     const now=new Date().toISOString(), next:WorkflowState={...current,assignmentRun:run,version:current.version+1,updatedAt:now,updatedBy:actor.uid,history:history(current,actor,'assignment.run.selected',`נבחרה הרצה: ${run.label??run.id}`,now)}
@@ -630,7 +631,8 @@ export const executeAppealChange = onCall(callableOptions, async (request) => {
       if (appeal.capacityOverride.approvedBy === actor.uid) throw new HttpsError('failed-precondition', 'מבצע השינוי חייב להיות אדם אחר ממאשר חריגת הקיבולת')
     }
     const previous = workflow.assignmentRun.assignments.find((entry) => entry.studentId === appeal.studentId && entry.clusterId === appeal.clusterId)!
-    const assignments = workflow.assignmentRun.assignments.map((entry) => entry === previous ? { ...entry, courseId: appeal.requestedCourseId, source: 'hard_constraint' as const, explanation: `שינוי לאחר ערעור ${appeal.id}` } : entry)
+    const appealRank = appeal.originalSubmission?.preferences.find(preference => preference.clusterId === appeal.clusterId)?.rankings.find(ranking => ranking.courseId === appeal.requestedCourseId)?.rank ?? null
+    const assignments = workflow.assignmentRun.assignments.map((entry) => entry === previous ? { ...entry, courseId: appeal.requestedCourseId, rank: appealRank, source: 'hard_constraint' as const, explanation: `שינוי לאחר ערעור ${appeal.id}` } : entry)
     const counts = { ...workflow.assignmentRun.enrollmentByCourse, [previous.courseId]: workflow.assignmentRun.enrollmentByCourse[previous.courseId] - 1, [appeal.requestedCourseId]: (workflow.assignmentRun.enrollmentByCourse[appeal.requestedCourseId] ?? 0) + 1 }
     const cluster = (catalogSnapshot.data() as CycleCatalogSnapshot | undefined)?.clusters.find((entry) => entry.clusterId === appeal.clusterId)
     const beforeCourse = courses.find((entry) => entry.id === previous.courseId)
@@ -752,10 +754,11 @@ export const changeStudentAssignment = onCall(callableOptions, async (request) =
   const requestedCourseId = requiredString(data, 'requestedCourseId')
   const reason = requiredString(data, 'reason').slice(0, 500)
   const expectedWorkflowVersion = requiredInteger(data, 'expectedWorkflowVersion')
-  const [cycleSnapshot, coursesSnapshot, catalogSnapshot] = await Promise.all([
+  const [cycleSnapshot, coursesSnapshot, catalogSnapshot, submissionsSnapshot] = await Promise.all([
     firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)).get(),
     firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId)).get(),
     firestore.doc(catalogSnapshotDocumentPath(actor.organizationId, cycleId)).get(),
+    firestore.collection(organizationCollectionPath(actor.organizationId, 'submissions')).where('cycleId', '==', cycleId).where('studentId', '==', studentId).get(),
   ])
   if (!['published', 'appeals'].includes(String(cycleSnapshot.data()?.status))) throw new HttpsError('failed-precondition', 'שינוי ידני אפשרי רק לאחר פרסום השיבוץ ולפני סיום המחזור')
   const courses = (coursesSnapshot.data()?.courses ?? []) as Course[]
@@ -763,6 +766,8 @@ export const changeStudentAssignment = onCall(callableOptions, async (request) =
   const afterCourse = courses.find((entry) => entry.id === requestedCourseId && entry.clusterId === clusterId && entry.published)
   if (!cluster || !afterCourse) throw new HttpsError('failed-precondition', 'הקורס המבוקש אינו זמין במקבץ שנבחר')
   const profile = (await studentAssignmentProfiles(actor.organizationId, [studentId])).get(studentId)
+  const submitted = latestSubmitted(submissionsSnapshot.docs.map(entry => entry.data() as PreferenceSubmission))[0]
+  const newRank = submitted?.preferences.find(entry => entry.clusterId === clusterId)?.rankings.find(entry => entry.courseId === requestedCourseId)?.rank ?? null
   if (!includesClass(cluster, profile?.classId)) throw new HttpsError('failed-precondition', 'כיתת התלמיד אינה משתתפת במקבץ זה')
   const secretaryIds = (await firestore.collection(`organizations/${actor.organizationId}/accessAssignments`).where('roles', 'array-contains', 'secretary').get()).docs.filter((entry) => entry.data().active === true).map((entry) => entry.id)
   const now = new Date().toISOString()
@@ -782,7 +787,7 @@ export const changeStudentAssignment = onCall(callableOptions, async (request) =
     if (afterCount > afterCourse.capacity.maximum) throw new HttpsError('failed-precondition', `בקורס ${afterCourse.label} אין מקום פנוי. בדקו את המכסה או בחרו קורס אחר`)
     const duplicate = workflow.assignmentRun.assignments.some((entry) => entry.studentId === studentId && entry.clusterId !== clusterId && courses.find((course) => course.id === entry.courseId)?.logicalCourseId === afterCourse.logicalCourseId)
     if (duplicate && afterCourse.repeatPolicy === 'prohibited') throw new HttpsError('failed-precondition', 'מדיניות הקורס אינה מאפשרת לתלמיד להשתתף בו שוב')
-    const assignments = workflow.assignmentRun.assignments.map((entry) => entry === previous ? { ...entry, courseId: afterCourse.id, source: 'hard_constraint' as const, explanation: 'שינוי ידני בידי רכז' } : entry)
+    const assignments = workflow.assignmentRun.assignments.map((entry) => entry === previous ? { ...entry, courseId: afterCourse.id, rank: newRank, source: 'manual' as const, explanation: 'שינוי ידני בידי רכז' } : entry)
     const counts = { ...workflow.assignmentRun.enrollmentByCourse, [beforeCourse.id]: workflow.assignmentRun.enrollmentByCourse[beforeCourse.id] - 1, [afterCourse.id]: afterCount }
     const eventId = `${cycleId}-${changeId}`
     const change: AssignmentChangeRecord = { id: changeId, cycleId, studentId, studentName: previous.studentLabel ?? profile?.displayLabel ?? 'תלמיד/ה', classLabel: previous.studentClassLabel ?? profile?.classLabel ?? '', clusterId, clusterLabel: cluster.label, beforeCourseId: beforeCourse.id, beforeCourseLabel: beforeCourse.label, afterCourseId: afterCourse.id, afterCourseLabel: afterCourse.label, occurredAt: now, source: 'manual', secretaryAutoEventId: eventId }

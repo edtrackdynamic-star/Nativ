@@ -148,6 +148,9 @@ export async function setAppealDeadline(cycleId:string,expectedVersion:number,ap
 export async function getStudentRoster(cycleId: string): Promise<import('../domain/studentRoster').StudentRosterEntry[]> {
   return (await httpsCallable<{ cycleId: string }, import('../domain/studentRoster').StudentRosterEntry[]>(functionsClient(), 'getStudentRoster')({ cycleId })).data
 }
+export async function getStudentChoiceDetails(cycleId: string, studentId: string): Promise<import('../domain/studentRoster').StudentChoiceDetails | null> {
+  return (await httpsCallable<{ cycleId: string; studentId: string }, import('../domain/studentRoster').StudentChoiceDetails | null>(functionsClient(), 'getStudentChoiceDetails')({ cycleId, studentId })).data
+}
 
 export async function approveAiEvaluation(cycleId: string, evaluationId: string, priority: AiPriority, summary: string, coursePriorities?: { courseId: string; priority: AiPriority }[]): Promise<WorkflowState> {
   return (await httpsCallable<Record<string, unknown>, WorkflowState>(functionsClient(), 'approveAiEvaluation')({ cycleId, evaluationId, priority, summary, ...(coursePriorities ? { coursePriorities } : {}), reason: 'בדיקה ואישור של רכז השיבוץ' })).data
@@ -165,8 +168,8 @@ export async function listAssignmentRuns(cycleId:string):Promise<AssignmentRun[]
   return (await httpsCallable<{cycleId:string},AssignmentRun[]>(functionsClient(),'listAssignmentRuns')({cycleId})).data
 }
 
-export async function selectAssignmentRun(cycleId:string,runId:string):Promise<WorkflowState> {
-  return (await httpsCallable<{cycleId:string;runId:string},WorkflowState>(functionsClient(),'selectAssignmentRun')({cycleId,runId})).data
+export async function selectAssignmentRun(cycleId:string,runId:string,expectedVersion?:number):Promise<WorkflowState> {
+  return (await httpsCallable<{cycleId:string;runId:string;expectedVersion?:number},WorkflowState>(functionsClient(),'selectAssignmentRun')({cycleId,runId,...(expectedVersion === undefined ? {} : {expectedVersion})})).data
 }
 
 export async function saveManualProposedAssignment(cycleId:string,studentId:string,clusterId:string,courseId:string,reason:string,expectedVersion:number):Promise<WorkflowState> {

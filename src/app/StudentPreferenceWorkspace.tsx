@@ -58,9 +58,9 @@ export function StudentPreferenceWorkspace({ cycleId, readOnly = false, schoolNa
         if (!alive.current) return
         const latest = [...submissions].filter((entry) => entry.status === 'submitted').sort((a,b) => b.submissionVersion - a.submissionVersion)[0]
         setLatestSubmission(latest ?? null)
-        setEditing(false)
         setSubmittedSignature(latest ? JSON.stringify(latest.preferences) : '')
         const draft = submissions.find((submission) => submission.status === 'draft')
+        setEditing(Boolean(draft && latest))
         setContext(choiceContext)
         setCycle(loadedCycle)
         setWorkflow(loadedWorkflow)
