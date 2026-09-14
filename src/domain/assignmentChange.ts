@@ -14,6 +14,7 @@ export interface AssignmentChangeRecord {
   afterCourseLabel: string
   occurredAt: string
   source: 'appeal' | 'manual'
+  capacityOverride?: { before: number; after: number; maximum: number; limit?: number }
   secretaryAutoEventId: string
   dispatches?: Partial<Record<ChangeAudience, string>>
 }

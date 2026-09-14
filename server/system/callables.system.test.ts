@@ -14,6 +14,7 @@ import { initializeApp as initializeAdminApp, deleteApp as deleteAdminApp } from
 import { getFirestore } from 'firebase-admin/firestore'
 import { readFileSync } from 'node:fs'
 import { reportOperationalFailure } from '../../functions/src/operationalIncidents'
+import { courseCatalogDocumentPath } from '../firestore/paths'
 
 interface SeedResult {
   cycleId: string
@@ -212,7 +213,14 @@ describe('Nativ callable system flow', () => {
     const artsAssignment=workflow.assignmentRun!.assignments.find(entry=>entry.clusterId==='cluster-arts')!
     const alternateArts=artsAssignment.courseId==='course-theater'?'course-music':'course-theater'
     await expect(manualProposal({cycleId:demoCycle.id,studentId:'student-demo-001',clusterId:'cluster-arts',courseId:alternateArts,reason:'בדיקת גרסה',expectedVersion:0})).rejects.toMatchObject({code:'functions/aborted'})
-    workflow=(await manualProposal({cycleId:demoCycle.id,studentId:'student-demo-001',clusterId:'cluster-arts',courseId:alternateArts,reason:'התאמה אישית בבדיקה',expectedVersion:workflow.version})).data
+    const catalogReference = getFirestore(adminApp).doc(courseCatalogDocumentPath(demoCycle.organizationId, demoCycle.id))
+    const originalCourses = (await catalogReference.get()).data()!.courses as Course[]
+    await catalogReference.update({ courses: originalCourses.map(course => course.id === alternateArts ? { ...course, capacity: { minimum: 0, target: 0, maximum: 0, limit: 1 } } : course) })
+    try {
+      await expect(manualProposal({cycleId:demoCycle.id,studentId:'student-demo-001',clusterId:'cluster-arts',courseId:alternateArts,reason:'ללא אישור חריגה',expectedVersion:workflow.version})).rejects.toMatchObject({code:'functions/failed-precondition'})
+      workflow=(await manualProposal({cycleId:demoCycle.id,studentId:'student-demo-001',clusterId:'cluster-arts',courseId:alternateArts,reason:'חריגה מהמקסימום הרגיל בשיבוץ ידני',expectedVersion:workflow.version,allowCapacityOverride:true})).data
+      expect(workflow.assignmentRun?.manualChanges?.at(-1)?.capacityOverride).toMatchObject({before:0,after:1,maximum:0,limit:1})
+    } finally { await catalogReference.update({ courses: originalCourses }) }
     expect(workflow.assignmentRun?.assignments.find(entry=>entry.clusterId==='cluster-arts')?.courseId).toBe(alternateArts)
     expect(workflow.assignmentRun).toMatchObject({parentRunId:baselineRunId,manualChanges:[{studentId:'student-demo-001',afterCourseId:alternateArts}]})
     expect(workflow.assignmentRun?.approvedAt).toBeUndefined()
@@ -346,9 +354,18 @@ describe('Nativ callable system flow', () => {
     expect(secretaryChangePreview.changes).toHaveLength(0)
     const directChange = httpsCallable<Record<string, unknown>, { workflow: WorkflowState; changeId: string }>(functions, 'changeStudentAssignment')
     await expect(directChange({ cycleId: demoCycle.id, studentId: 'student-demo-001', clusterId: 'cluster-arts', requestedCourseId, reason: 'אותו קורס', expectedWorkflowVersion: workflow.version })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
-    const direct = (await directChange({ cycleId: demoCycle.id, studentId: 'student-demo-001', clusterId: 'cluster-arts', requestedCourseId: current.courseId, reason: 'שינוי בדיקת מערכת', expectedWorkflowVersion: workflow.version })).data
+    const publishedCatalogReference = getFirestore(adminApp).doc(courseCatalogDocumentPath(demoCycle.organizationId, demoCycle.id))
+    const publishedCourses = (await publishedCatalogReference.get()).data()!.courses as Course[]
+    await publishedCatalogReference.update({ courses: publishedCourses.map(course => course.id === current.courseId ? { ...course, capacity: { minimum: 0, target: 0, maximum: 0, limit: 1 } } : course) })
+    let direct: { workflow: WorkflowState; changeId: string }
+    try {
+      await expect(directChange({ cycleId: demoCycle.id, studentId: 'student-demo-001', clusterId: 'cluster-arts', requestedCourseId: current.courseId, reason: 'ללא אישור חריגה', expectedWorkflowVersion: workflow.version })).rejects.toMatchObject({ code: 'functions/failed-precondition' })
+      direct = (await directChange({ cycleId: demoCycle.id, studentId: 'student-demo-001', clusterId: 'cluster-arts', requestedCourseId: current.courseId, reason: 'חריגה מהמקסימום הרגיל בשיבוץ ידני', expectedWorkflowVersion: workflow.version, allowCapacityOverride: true })).data
+    } finally { await publishedCatalogReference.update({ courses: publishedCourses }) }
     workflow = direct.workflow
     expect(direct.changeId).toMatch(/^manual-/)
+    expect(workflow.assignmentRun?.manualChanges?.at(-1)?.capacityOverride).toMatchObject({ before: 0, after: 1, maximum: 0, limit: 1 })
+    expect((await getFirestore(adminApp).doc(`organizations/${demoCycle.organizationId}/assignmentChanges/${demoCycle.id}/entries/${direct.changeId}`).get()).data()?.capacityOverride).toMatchObject({ before: 0, after: 1, maximum: 0, limit: 1 })
     expect(workflow.assignmentRun?.assignments.find((entry) => entry.studentId === 'student-demo-001' && entry.clusterId === 'cluster-arts')?.courseId).toBe(current.courseId)
     expect(workflow.assignmentRun?.assignments.find((entry) => entry.studentId === 'student-demo-001' && entry.clusterId === 'cluster-arts')?.rank).toBe(demoSubmission.preferences[0].rankings.find(entry=>entry.courseId===current.courseId)?.rank)
     expect((await previewChanges({ cycleId: demoCycle.id, audience: 'student' })).data.changes).toHaveLength(1)

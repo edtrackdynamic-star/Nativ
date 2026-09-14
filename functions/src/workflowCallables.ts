@@ -1,4 +1,5 @@
 import { includesClass } from '../../src/domain/classEligibility'
+import { manualCapacityDecision } from '../../src/domain/manualCapacity'
 import { runReadiness } from '../../src/domain/runReadiness'
 import { needsIndividualAiReview } from '../../src/domain/aiReview'
 import { defineSecret } from 'firebase-functions/params'
@@ -667,6 +668,7 @@ export const saveManualProposedAssignment = onCall(callableOptions, async reques
   const courseId = requiredString(data, 'courseId')
   const reason = requiredString(data, 'reason').trim().slice(0, 500)
   const expectedVersion = requiredInteger(data, 'expectedVersion')
+  const allowCapacityOverride = data.allowCapacityOverride === true
   if (!reason) throw new HttpsError('invalid-argument', 'יש לציין סיבה לשיבוץ הידני')
   const [profile, submissions, catalogSnapshot, coursesSnapshot] = await Promise.all([
     studentAssignmentProfiles(actor.organizationId, [studentId]),
@@ -691,7 +693,10 @@ export const saveManualProposedAssignment = onCall(callableOptions, async reques
     const previous = parent.assignments.find(entry => entry.studentId === studentId && entry.clusterId === clusterId)
     if (previous?.courseId === courseId) throw new HttpsError('already-exists', 'התלמיד כבר משובץ לקורס הזה')
     const currentCount = parent.enrollmentByCourse[courseId] ?? 0
-    if (currentCount >= course.capacity.maximum) throw new HttpsError('failed-precondition', `בקורס ${course.label} אין מקום פנוי. בחרו קורס אחר או צרו הרצה חדשה עם מכסה מתאימה.`)
+    const capacity = manualCapacityDecision(course, currentCount)
+    if (capacity.outcome === 'hard_limit') throw new HttpsError('failed-precondition', `בקורס ${course.label} הושגה התקרה הקשיחה (${capacity.limit}). אי אפשר לחרוג ממנה בשיבוץ הידני.`)
+    if (capacity.outcome === 'over_maximum' && !allowCapacityOverride) throw new HttpsError('failed-precondition', `השיבוץ יחרוג מהמקסימום בקורס ${course.label}. רעננו את הלוח ובחרו שוב בקורס כדי לבצע את החריגה.`)
+    const capacityOverride = capacity.outcome === 'over_maximum' ? { before: capacity.before, after: capacity.after, maximum: capacity.maximum, ...(capacity.limit === undefined ? {} : { limit: capacity.limit }) } : undefined
     const allCourses = (coursesSnapshot.data()?.courses ?? []) as Course[]
     if (course.repeatPolicy === 'prohibited' && parent.assignments.some(entry => entry.studentId === studentId && entry.clusterId !== clusterId && allCourses.find(item => item.id === entry.courseId)?.logicalCourseId === course.logicalCourseId)) throw new HttpsError('failed-precondition', 'התלמיד כבר שובץ לאותו קורס במקבץ אחר, ומדיניות החזרה אינה מאפשרת זאת.')
     const rank = submitted.preferences.find(entry => entry.clusterId === clusterId)?.rankings.find(entry => entry.courseId === courseId)?.rank ?? null
@@ -702,9 +707,9 @@ export const saveManualProposedAssignment = onCall(callableOptions, async reques
     const now = new Date().toISOString()
     const run: AssignmentRun = { ...parent, id: randomUUID(), parentRunId: parent.id, label: `${parent.label ?? 'הרצה'} — תיקון ידני`, executedAt: now, executedBy: actor.uid, assignments, enrollmentByCourse,
       warnings: parent.warnings.filter(warning => warning !== `${student.displayLabel}: לא נמצא מקום פנוי במקבץ ${clusterId}`),
-      manualChanges: [...(parent.manualChanges ?? []), { studentId, clusterId, ...(previous ? { beforeCourseId: previous.courseId } : {}), afterCourseId: courseId, changedAt: now, changedBy: actor.uid, reason }] }
+      manualChanges: [...(parent.manualChanges ?? []), { studentId, clusterId, ...(previous ? { beforeCourseId: previous.courseId } : {}), afterCourseId: courseId, changedAt: now, changedBy: actor.uid, reason, ...(capacityOverride ? { capacityOverride } : {}) }] }
     delete run.approvedAt; delete run.approvedBy; delete run.publishedAt; delete run.rejectedAt; delete run.rejectedBy; delete run.rejectionReason
-    const next: WorkflowState = { ...workflow!, assignmentRun: run, version: workflow!.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow!, actor, 'assignment.proposed.manual_change', `תיקון ידני בהרצה: ${reason}`, now) }
+    const next: WorkflowState = { ...workflow!, assignmentRun: run, version: workflow!.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow!, actor, 'assignment.proposed.manual_change', `תיקון ידני בהרצה: ${reason}${capacityOverride ? `; חריגת קיבולת ${capacityOverride.before}→${capacityOverride.after} מעל ${capacityOverride.maximum}` : ''}`, now) }
     transaction.create(firestore.doc(assignmentRunDocumentPath(actor.organizationId, cycleId, run.id)), { ...run, organizationId: actor.organizationId, cycleId })
     transaction.set(reference, next)
     return next
@@ -754,6 +759,7 @@ export const changeStudentAssignment = onCall(callableOptions, async (request) =
   const requestedCourseId = requiredString(data, 'requestedCourseId')
   const reason = requiredString(data, 'reason').slice(0, 500)
   const expectedWorkflowVersion = requiredInteger(data, 'expectedWorkflowVersion')
+  const allowCapacityOverride = data.allowCapacityOverride === true
   const [cycleSnapshot, coursesSnapshot, catalogSnapshot, submissionsSnapshot] = await Promise.all([
     firestore.doc(cycleDocumentPath(actor.organizationId, cycleId)).get(),
     firestore.doc(courseCatalogDocumentPath(actor.organizationId, cycleId)).get(),
@@ -783,20 +789,22 @@ export const changeStudentAssignment = onCall(callableOptions, async (request) =
     if (workflow.appeals.some((entry) => entry.studentId === studentId && entry.clusterId === clusterId && !['executed', 'rejected'].includes(entry.status))) throw new HttpsError('failed-precondition', 'לתלמיד יש ערעור פתוח במקבץ זה. השלימו את הטיפול בו לפני שינוי ידני')
     const beforeCourse = courses.find((entry) => entry.id === previous.courseId)
     if (!beforeCourse) throw new HttpsError('failed-precondition', 'הקורס הנוכחי אינו קיים בקטלוג')
-    const afterCount = (workflow.assignmentRun.enrollmentByCourse[afterCourse.id] ?? 0) + 1
-    if (afterCount > afterCourse.capacity.maximum) throw new HttpsError('failed-precondition', `בקורס ${afterCourse.label} אין מקום פנוי. בדקו את המכסה או בחרו קורס אחר`)
+    const capacity = manualCapacityDecision(afterCourse, workflow.assignmentRun.enrollmentByCourse[afterCourse.id] ?? 0)
+    if (capacity.outcome === 'hard_limit') throw new HttpsError('failed-precondition', `בקורס ${afterCourse.label} הושגה התקרה הקשיחה (${capacity.limit}). אי אפשר לחרוג ממנה בשיבוץ הידני.`)
+    if (capacity.outcome === 'over_maximum' && !allowCapacityOverride) throw new HttpsError('failed-precondition', `השיבוץ יחרוג מהמקסימום בקורס ${afterCourse.label}. רעננו את הלוח ובחרו שוב בקורס כדי לבצע את החריגה.`)
+    const capacityOverride = capacity.outcome === 'over_maximum' ? { before: capacity.before, after: capacity.after, maximum: capacity.maximum, ...(capacity.limit === undefined ? {} : { limit: capacity.limit }) } : undefined
     const duplicate = workflow.assignmentRun.assignments.some((entry) => entry.studentId === studentId && entry.clusterId !== clusterId && courses.find((course) => course.id === entry.courseId)?.logicalCourseId === afterCourse.logicalCourseId)
     if (duplicate && afterCourse.repeatPolicy === 'prohibited') throw new HttpsError('failed-precondition', 'מדיניות הקורס אינה מאפשרת לתלמיד להשתתף בו שוב')
     const assignments = workflow.assignmentRun.assignments.map((entry) => entry === previous ? { ...entry, courseId: afterCourse.id, rank: newRank, source: 'manual' as const, explanation: 'שינוי ידני בידי רכז' } : entry)
-    const counts = { ...workflow.assignmentRun.enrollmentByCourse, [beforeCourse.id]: workflow.assignmentRun.enrollmentByCourse[beforeCourse.id] - 1, [afterCourse.id]: afterCount }
+    const counts = { ...workflow.assignmentRun.enrollmentByCourse, [beforeCourse.id]: workflow.assignmentRun.enrollmentByCourse[beforeCourse.id] - 1, [afterCourse.id]: capacity.after }
     const eventId = `${cycleId}-${changeId}`
-    const change: AssignmentChangeRecord = { id: changeId, cycleId, studentId, studentName: previous.studentLabel ?? profile?.displayLabel ?? 'תלמיד/ה', classLabel: previous.studentClassLabel ?? profile?.classLabel ?? '', clusterId, clusterLabel: cluster.label, beforeCourseId: beforeCourse.id, beforeCourseLabel: beforeCourse.label, afterCourseId: afterCourse.id, afterCourseLabel: afterCourse.label, occurredAt: now, source: 'manual', secretaryAutoEventId: eventId }
+    const change: AssignmentChangeRecord = { id: changeId, cycleId, studentId, studentName: previous.studentLabel ?? profile?.displayLabel ?? 'תלמיד/ה', classLabel: previous.studentClassLabel ?? profile?.classLabel ?? '', clusterId, clusterLabel: cluster.label, beforeCourseId: beforeCourse.id, beforeCourseLabel: beforeCourse.label, afterCourseId: afterCourse.id, afterCourseLabel: afterCourse.label, occurredAt: now, source: 'manual', ...(capacityOverride ? { capacityOverride } : {}), secretaryAutoEventId: eventId }
     const mailJob: MailJob = { notificationId: eventId, audience: 'secretary', studentId, recipientIds: secretaryIds, clusterLabel: cluster.label, beforeCourseLabel: beforeCourse.label, afterCourseLabel: afterCourse.label, occurredAt: now }
     const notifications: NotificationRecord[] = [
       { id: randomUUID(), audience: 'student', recipientRef: studentId, channel: 'in_app', subject: 'השיבוץ שלך עודכן', body: `השיבוץ במקבץ ${cluster.label} עודכן ל${afterCourse.label}`, status: 'available', createdAt: now },
       { id: eventId, audience: 'secretary', recipientRef: 'school-secretary', channel: 'email', subject: 'שינוי שיבוץ', body: `${beforeCourse.label} ← ${afterCourse.label}`, status: 'queued', deliveryEventId: eventId, createdAt: now },
     ]
-    const next: WorkflowState = { ...workflow, assignmentRun: { ...workflow.assignmentRun, assignments, enrollmentByCourse: counts }, notifications: [...workflow.notifications, ...notifications], version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'assignment.manual_change.executed', reason, now) }
+    const next: WorkflowState = { ...workflow, assignmentRun: { ...workflow.assignmentRun, assignments, enrollmentByCourse: counts, manualChanges: [...(workflow.assignmentRun.manualChanges ?? []), { studentId, clusterId, beforeCourseId: beforeCourse.id, afterCourseId: afterCourse.id, changedAt: now, changedBy: actor.uid, reason, ...(capacityOverride ? { capacityOverride } : {}) }] }, notifications: [...workflow.notifications, ...notifications], version: workflow.version + 1, updatedAt: now, updatedBy: actor.uid, history: history(workflow, actor, 'assignment.manual_change.executed', `${reason}${capacityOverride ? `; חריגת קיבולת ${capacityOverride.before}→${capacityOverride.after} מעל ${capacityOverride.maximum}` : ''}`, now) }
     transaction.set(reference, next)
     transaction.create(firestore.doc(`organizations/${actor.organizationId}/assignmentChanges/${cycleId}/entries/${changeId}`), change)
     transaction.create(firestore.doc(`organizations/${actor.organizationId}/mailEvents/${eventId}`), { organizationId: actor.organizationId, cycleId, jobs: [mailJob], status: secretaryIds.length ? 'queued' : 'failed', errorCode: secretaryIds.length ? null : 'no_active_secretary', attempts: 0, createdAt: now, createdBy: actor.uid })

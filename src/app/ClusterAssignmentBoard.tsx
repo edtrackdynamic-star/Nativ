@@ -3,6 +3,7 @@ import type { AssignmentRun, WorkflowState } from '../domain/workflow'
 import type { AssignmentResult } from '../domain/assignmentEngine'
 import type { AssignmentBoard, BoardStudent } from '../domain/assignmentBoard'
 import { buildAssignmentBoard } from '../domain/assignmentBoard'
+import { manualCapacityDecision } from '../domain/manualCapacity'
 import type { Course, CycleCatalogSnapshot } from '../domain/catalog'
 import type { StudentChoiceDetails, StudentRosterEntry } from '../domain/studentRoster'
 import { changeStudentAssignment, getStudentChoiceDetails, saveManualProposedAssignment, selectAssignmentRun } from './firebaseApi'
@@ -24,8 +25,8 @@ function previewRun(run: AssignmentRun, student: BoardStudent, clusterId: string
 const rankText = (rank: number | null) => rank === null ? 'לא דורג' : `בחירה ${rank}`
 const rankTone = (rank: number | null) => rank === 1 ? 'first' : rank === 2 ? 'second' : rank !== null && rank >= 3 ? 'later' : 'unranked'
 
-export function ClusterAssignmentBoard({ cycleId, run, workflow, board, roster, courses, catalog, clusterId, editable, onWorkflow, onPublishedChanged, onShowDelivery, onDraftChange, onBusyChange }: {
-  cycleId: string; run: AssignmentRun; workflow?: WorkflowState; board: AssignmentBoard; roster: StudentRosterEntry[]; courses: Course[]; catalog: CycleCatalogSnapshot | null; clusterId: string; editable: boolean
+export function ClusterAssignmentBoard({ cycleId, run, workflow, board, roster, courses, catalog, clusterId, query, editable, onWorkflow, onPublishedChanged, onShowDelivery, onDraftChange, onBusyChange }: {
+  cycleId: string; run: AssignmentRun; workflow?: WorkflowState; board: AssignmentBoard; roster: StudentRosterEntry[]; courses: Course[]; catalog: CycleCatalogSnapshot | null; clusterId: string; query: string; editable: boolean
   onWorkflow?: (next: WorkflowState) => void; onPublishedChanged?: () => Promise<void>; onShowDelivery?: () => void; onDraftChange?: (dirty: boolean) => void; onBusyChange?: (busy: boolean) => void
 }) {
   const [selectedStudentId, setSelectedStudentId] = useState('')
@@ -33,9 +34,9 @@ export function ClusterAssignmentBoard({ cycleId, run, workflow, board, roster, 
   const [savedMove, setSavedMove] = useState<SavedMove | null>(null)
   const [undoConfirm, setUndoConfirm] = useState(false)
   const [reason, setReason] = useState('')
-  const [query, setQuery] = useState('')
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState('')
+  const [toast, setToast] = useState('')
   const [detailStudent, setDetailStudent] = useState<BoardStudent | null>(null)
   const [detailResult, setDetailResult] = useState<{ studentId: string; details: StudentChoiceDetails | null } | null>(null)
   const [detailError, setDetailError] = useState('')
@@ -47,6 +48,7 @@ export function ClusterAssignmentBoard({ cycleId, run, workflow, board, roster, 
   useEffect(() => () => { onDraftChange?.(false) }, [onDraftChange])
   useEffect(() => { onBusyChange?.(pending) }, [pending, onBusyChange])
   useEffect(() => () => { onBusyChange?.(false) }, [onBusyChange])
+  useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 4500); return () => window.clearTimeout(timer) }, [toast])
   const cluster = board.clusters.find(entry => entry.id === clusterId)
   const actualStudents = board.students.filter(student => student.cells[clusterId]?.status !== 'not_applicable')
   const selected = actualStudents.find(student => student.id === selectedStudentId)
@@ -84,34 +86,44 @@ export function ClusterAssignmentBoard({ cycleId, run, workflow, board, roster, 
     if (current.course?.id === courseId) { setStaged(null); return }
     if (!['assigned', 'unassigned'].includes(current.status) || (current.status === 'unassigned' && (!selected.hasForm || run.publishedAt))) { setMessage('אפשר להעביר רק תלמיד/ה המשתתף/ת במקבץ. לאחר פרסום נדרש שיבוץ קיים.'); return }
     if (workflow.appeals.some(appeal => appeal.studentId === selected.id && appeal.clusterId === clusterId && !['executed', 'rejected'].includes(appeal.status))) { setMessage('לתלמיד/ה יש ערעור פתוח במקבץ זה. יש לטפל בו תחילה.'); return }
-    const count = actualCourses.find(course => course.id === courseId)?.students.length ?? 0
-    if (count >= next.capacity.maximum) { setMessage(`בקורס ${next.label} אין מקום פנוי.`); return }
     if (next.repeatPolicy === 'prohibited' && run.assignments.some(entry => entry.studentId === selected.id && entry.clusterId !== clusterId && courses.find(course => course.id === entry.courseId)?.logicalCourseId === next.logicalCourseId)) { setMessage('מדיניות הקורס אינה מאפשרת לתלמיד/ה להשתתף בו שוב.'); return }
-    setStaged({ studentId: selected.id, beforeCourseId: current.course?.id ?? '', afterCourseId: courseId })
+    const count = actualCourses.find(course => course.id === courseId)?.students.length ?? 0
+    const capacity = manualCapacityDecision(next, count)
+    if (capacity.outcome === 'hard_limit') { setMessage(`בקורס ${next.label} הושגה התקרה הקשיחה (${capacity.limit}). אי אפשר להוסיף אליו תלמיד/ה בשיבוץ ידני.`); return }
+    const move = { studentId: selected.id, beforeCourseId: current.course?.id ?? '', afterCourseId: courseId }
+    if (capacity.outcome === 'over_maximum') { setStaged(null); void saveMove(move, 'חריגה מהמקסימום הרגיל בשיבוץ ידני', true); return }
+    setStaged(move)
     setReason('')
   }
 
-  async function save() {
-    if (!staged || !workflow || !reason.trim() || pending || !editable) return
-    setPending(true); setMessage('')
+  async function saveMove(move: StagedMove, changeReason: string, allowCapacityOverride: boolean) {
+    if (!workflow || !changeReason.trim() || pending || !editable) return
+    setPending(true); setMessage(''); setToast('')
     let saved = false
     try {
       if (run.publishedAt) {
-        const result = await changeStudentAssignment(cycleId, staged.studentId, clusterId, staged.afterCourseId, reason.trim(), workflow.version)
+        const result = await changeStudentAssignment(cycleId, move.studentId, clusterId, move.afterCourseId, changeReason.trim(), workflow.version, allowCapacityOverride)
         saved = true
-        setSavedMove({ kind: 'published', studentId: staged.studentId, beforeCourseId: staged.beforeCourseId, afterCourseId: staged.afterCourseId, previousRunId: run.id, resultingRunId: run.id, workflowVersion: result.workflow.version })
+        setSavedMove({ kind: 'published', studentId: move.studentId, beforeCourseId: move.beforeCourseId, afterCourseId: move.afterCourseId, previousRunId: run.id, resultingRunId: run.id, workflowVersion: result.workflow.version })
         await onPublishedChanged?.()
-        setMessage('השיבוץ עודכן. העדכון למזכירות הועבר לשליחה; אפשר לבדוק ולשלוח עדכונים נוספים.')
+        if (!allowCapacityOverride) setMessage('השיבוץ עודכן. העדכון למזכירות הועבר לתור; אפשר לבדוק ולשלוח עדכונים נוספים.')
       } else {
-        const next = await saveManualProposedAssignment(cycleId, staged.studentId, clusterId, staged.afterCourseId, reason.trim(), workflow.version)
+        const next = await saveManualProposedAssignment(cycleId, move.studentId, clusterId, move.afterCourseId, changeReason.trim(), workflow.version, allowCapacityOverride)
         saved = true
         onWorkflow?.(next)
-        setSavedMove({ kind: 'proposed', studentId: staged.studentId, beforeCourseId: staged.beforeCourseId, afterCourseId: staged.afterCourseId, previousRunId: run.id, resultingRunId: next.assignmentRun?.id ?? '', workflowVersion: next.version })
-        setMessage('נשמרה גרסת הצעה חדשה. השינוי עדיין לא פורסם לתלמידים.')
+        setSavedMove({ kind: 'proposed', studentId: move.studentId, beforeCourseId: move.beforeCourseId, afterCourseId: move.afterCourseId, previousRunId: run.id, resultingRunId: next.assignmentRun?.id ?? '', workflowVersion: next.version })
+        if (!allowCapacityOverride) setMessage('נשמרה גרסת הצעה חדשה. השינוי עדיין לא פורסם לתלמידים.')
+      }
+      if (allowCapacityOverride) {
+        const course = courses.find(entry => entry.id === move.afterCourseId)
+        const beforeCount = board.courses.find(entry => entry.id === move.afterCourseId)?.students.length ?? 0
+        setToast(`השיבוץ נשמר בחריגה מהמקסימום של ${course?.label ?? 'הקורס'}: ${beforeCount + 1} תלמידים במקום ${course?.capacity.maximum ?? 'המכסה'}.`)
       }
     } catch (error) { setMessage(saved ? 'השינוי נשמר, אך רענון הלוח נכשל. רעננו ובדקו את השיבוץ לפני פעולה נוספת.' : error instanceof Error ? `השינוי לא נשמר: ${error.message}` : 'השינוי לא נשמר. רעננו את הנתונים ונסו שוב.') }
     finally { if (saved) { setStaged(null); setReason(''); setSelectedStudentId('') } setPending(false) }
   }
+
+  async function save() { if (staged) await saveMove(staged, reason, false) }
 
   async function undo() {
     if (!savedMove || !workflow || !canUndoSaved || pending) return
@@ -124,7 +136,7 @@ export function ClusterAssignmentBoard({ cycleId, run, workflow, board, roster, 
         onWorkflow?.(next)
         setMessage('השינוי בוטל וגרסת ההצעה הקודמת הוחזרה.')
       } else {
-        await changeStudentAssignment(cycleId, savedMove.studentId, clusterId, savedMove.beforeCourseId, 'ביטול שינוי שיבוץ ידני קודם', workflow.version)
+        await changeStudentAssignment(cycleId, savedMove.studentId, clusterId, savedMove.beforeCourseId, 'ביטול שינוי שיבוץ ידני קודם', workflow.version, true)
         restored = true
         await onPublishedChanged?.()
         setMessage('השיבוץ הקודם הוחזר. גם פעולה זו תועדה ונשלח עדכון למזכירות.')
@@ -138,9 +150,7 @@ export function ClusterAssignmentBoard({ cycleId, run, workflow, board, roster, 
   const selectedPreference = choiceDetails?.preferences.find(preference => preference.clusterId === clusterId)
   const selectedSnapshot = choiceDetails?.catalogSnapshot.find(snapshot => snapshot.clusterId === clusterId)
   return <section className="cluster-board" aria-label={`שיבוץ במקבץ ${cluster.label}`}>
-    <div className="cluster-board-toolbar"><div><h4>{cluster.label}</h4><p>{cluster.weeklySlot} · {actualCourses.reduce((sum, course) => sum + course.students.length, 0)} משובצים</p></div><label>חיפוש תלמיד/ה<input value={query} onChange={event => setQuery(event.target.value)} placeholder="שם או כיתה" /></label></div>
-    <p className="cluster-board-help">{editable ? 'בחרו תלמיד/ה ואז לחצו על כותרת הקורס שאליו רוצים להעביר. לחיצה כפולה או כפתור „בחירות” מציגים את הדירוג והנימוק.' : 'לחיצה כפולה או כפתור „בחירות” מציגים את הדירוג והנימוק.'}</p>
-    <div className="cluster-board-legend" aria-label="מקרא דירוגים"><span data-rank="first">בחירה 1</span><span data-rank="second">בחירה 2</span><span data-rank="later">בחירה 3 ומטה</span><span data-rank="unranked">לא דורג</span></div>
+    {toast && <div className="cluster-board-toast" role="status">{toast}</div>}
     {message && <p role={message.startsWith('השינוי לא') || message.startsWith('הביטול לא') ? 'alert' : 'status'}>{message}</p>}
     <div className="cluster-board-scroll"><div className="cluster-board-columns">
       {clusterCourses.map(course => <section key={course.id} className="cluster-board-column" aria-label={`${course.label}, ${course.students.length} משובצים`}><header><button type="button" className="cluster-board-target" disabled={!selected || !editable || pending} onClick={() => stage(course.id)} aria-label={`הצעת העברה של ${selected?.name ?? 'תלמיד/ה'} אל ${course.label}`}><strong>{course.label}</strong><span>{course.students.length} / {course.maximum} משובצים</span></button><small>{course.instructorNames.join(', ') || 'מנחה לא הוגדר'}{course.meetingPlace ? ` · ${course.meetingPlace}` : ''}</small></header><div className="cluster-board-students">{course.students.filter(visible).map(student => { const assignment = student.cells[clusterId]?.assignment; return <div className={`cluster-board-student ${selectedStudentId === student.id ? 'selected' : ''} ${staged?.studentId === student.id ? 'staged' : ''}`} data-rank={rankTone(assignment?.rank ?? null)} key={student.id}><button type="button" className="cluster-board-student-select" aria-pressed={selectedStudentId === student.id} onClick={() => selectStudent(student)} onDoubleClick={() => openDetails(student)}><strong>{student.name}</strong><small>{student.classLabel} · {rankText(assignment?.rank ?? null)}</small></button><button type="button" className="cluster-board-info" onClick={() => openDetails(student)} aria-label={`הבחירות של ${student.name}`}>בחירות</button></div> })}{!course.students.length && <p className="cluster-board-empty">אין תלמידים משובצים.</p>}</div></section>)}

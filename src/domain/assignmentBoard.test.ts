@@ -44,4 +44,11 @@ describe('assignment board', () => {
     const board = buildAssignmentBoard(run, roster, courses, sampleCatalog)
     expect(board.students.find(student => student.id === 's1')?.cells['cluster-a'].assignment?.rank).toBe(2)
   })
+  it('keeps a documented manual capacity exception out of the unresolved issues banner', () => {
+    const courses = sampleCourses.map(course => ({ ...course, capacity: { ...course.capacity, maximum: 0 } }))
+    const unrecorded = buildAssignmentBoard(sampleRun, sampleRoster, courses, sampleCatalog)
+    expect(unrecorded.issues.some(issue => issue.includes('מעל הקיבולת'))).toBe(true)
+    const documented: AssignmentRun = { ...sampleRun, manualChanges: [{ studentId: 's1', clusterId: 'cluster-a', afterCourseId: 'course-a', changedAt: '2026-09-14T10:00:00Z', changedBy: 'coordinator', reason: 'חריגה מהמקסימום הרגיל בשיבוץ ידני', capacityOverride: { before: 0, after: 1, maximum: 0 } }] }
+    expect(buildAssignmentBoard(documented, sampleRoster, courses, sampleCatalog).issues.some(issue => issue.includes('מעל הקיבולת'))).toBe(false)
+  })
 })

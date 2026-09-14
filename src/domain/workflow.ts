@@ -29,7 +29,7 @@ export interface AssignmentRun {
   includedStudentClusterCount?: number
   excludedStudentClusterCount?: number
   parentRunId?: string
-  manualChanges?: { studentId: string; clusterId: string; beforeCourseId?: string; afterCourseId: string; changedAt: string; changedBy: string; reason: string }[]
+  manualChanges?: { studentId: string; clusterId: string; beforeCourseId?: string; afterCourseId: string; changedAt: string; changedBy: string; reason: string; capacityOverride?: { before: number; after: number; maximum: number; limit?: number } }[]
   approvedAt?: string
   approvedBy?: string
   publishedAt?: string

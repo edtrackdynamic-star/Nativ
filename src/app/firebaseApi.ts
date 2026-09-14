@@ -172,8 +172,8 @@ export async function selectAssignmentRun(cycleId:string,runId:string,expectedVe
   return (await httpsCallable<{cycleId:string;runId:string;expectedVersion?:number},WorkflowState>(functionsClient(),'selectAssignmentRun')({cycleId,runId,...(expectedVersion === undefined ? {} : {expectedVersion})})).data
 }
 
-export async function saveManualProposedAssignment(cycleId:string,studentId:string,clusterId:string,courseId:string,reason:string,expectedVersion:number):Promise<WorkflowState> {
-  return (await httpsCallable<Record<string,unknown>,WorkflowState>(functionsClient(),'saveManualProposedAssignment')({cycleId,studentId,clusterId,courseId,reason,expectedVersion})).data
+export async function saveManualProposedAssignment(cycleId:string,studentId:string,clusterId:string,courseId:string,reason:string,expectedVersion:number,allowCapacityOverride=false):Promise<WorkflowState> {
+  return (await httpsCallable<Record<string,unknown>,WorkflowState>(functionsClient(),'saveManualProposedAssignment')({cycleId,studentId,clusterId,courseId,reason,expectedVersion,allowCapacityOverride})).data
 }
 
 export async function approveAssignmentRun(cycleId: string): Promise<WorkflowState> {
@@ -228,7 +228,7 @@ export type ChangeAudience = import('../domain/assignmentChange').ChangeAudience
 export interface ChangeDeliveryPreview { signature:string; recipientSignature:string; version:number; changes:import('../domain/assignmentChange').AssignmentChangeRecord[]; messages:Array<{name:string;email:string;subject:string;text:string}>; skipped:number; autoHandled:number; needsReview:number; delivery:{sent:number;queued:number;failed:number;unknown:number} }
 export async function previewAssignmentChangeDelivery(cycleId:string,audience:ChangeAudience,changeId?:string):Promise<ChangeDeliveryPreview>{return (await httpsCallable<Record<string,unknown>,ChangeDeliveryPreview>(functionsClient(),'previewAssignmentChangeDelivery')({cycleId,audience,changeId})).data}
 export async function sendAssignmentChangeDelivery(cycleId:string,audience:ChangeAudience,preview:ChangeDeliveryPreview,changeId?:string){return (await httpsCallable<Record<string,unknown>,{alreadyQueued:boolean}>(functionsClient(),'sendAssignmentChangeDelivery')({cycleId,audience,changeId,signature:preview.signature,recipientSignature:preview.recipientSignature,expectedVersion:preview.version})).data}
-export async function changeStudentAssignment(cycleId:string,studentId:string,clusterId:string,requestedCourseId:string,reason:string,expectedWorkflowVersion:number):Promise<{workflow:WorkflowState;changeId:string}>{return (await httpsCallable<Record<string,unknown>,{workflow:WorkflowState;changeId:string}>(functionsClient(),'changeStudentAssignment')({cycleId,studentId,clusterId,requestedCourseId,reason,expectedWorkflowVersion})).data}
+export async function changeStudentAssignment(cycleId:string,studentId:string,clusterId:string,requestedCourseId:string,reason:string,expectedWorkflowVersion:number,allowCapacityOverride=false):Promise<{workflow:WorkflowState;changeId:string}>{return (await httpsCallable<Record<string,unknown>,{workflow:WorkflowState;changeId:string}>(functionsClient(),'changeStudentAssignment')({cycleId,studentId,clusterId,requestedCourseId,reason,expectedWorkflowVersion,allowCapacityOverride})).data}
 export interface OperationalIncident { id:string; action:string; category:string; occurredAt:string; lastSeenAt:string; occurrences:number; status:string }
 export async function listOperationalIncidents():Promise<OperationalIncident[]>{return (await httpsCallable<undefined,OperationalIncident[]>(functionsClient(),'listOperationalIncidents')()).data}
 export async function rejectAssignmentRun(cycleId:string,expectedVersion:number,reason:string){await httpsCallable(functionsClient(),'rejectAssignmentRun')({cycleId,expectedVersion,reason})}

@@ -65,7 +65,8 @@ export function buildAssignmentBoard(run: AssignmentRun, roster: StudentRosterEn
   const courseOrder = new Map(catalog?.clusters.flatMap(cluster => cluster.courses.map((course, index) => [course.courseId, index] as const)) ?? [])
   boardCourses.sort((a, b) => (clusterOrder.get(a.clusterId) ?? Number.MAX_SAFE_INTEGER) - (clusterOrder.get(b.clusterId) ?? Number.MAX_SAFE_INTEGER) || (courseOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (courseOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER) || collator.compare(a.label, b.label))
   for (const course of boardCourses) {
-    if (course.students.length > course.maximum) issues.push(`בקורס ${course.label} יש ${course.students.length} תלמידים, מעל הקיבולת המרבית ${course.maximum}.`)
+    const documentedManualOverride = run.manualChanges?.some(change => change.afterCourseId === course.id && change.capacityOverride?.maximum === course.maximum && change.capacityOverride.after >= course.students.length)
+    if (course.students.length > course.maximum && !documentedManualOverride) issues.push(`בקורס ${course.label} יש ${course.students.length} תלמידים, מעל הקיבולת המרבית ${course.maximum}.`)
     if (run.enrollmentByCourse[course.id] !== undefined && run.enrollmentByCourse[course.id] !== course.students.length) issues.push(`ספירת המשובצים בקורס ${course.label} אינה תואמת את נתוני ההרצה.`)
   }
   if (run.includedStudentClusterCount !== undefined && run.assignments.length !== run.includedStudentClusterCount) issues.push(`מספר השיבוצים (${run.assignments.length}) שונה ממספר המקומות שנכללו בהרצה (${run.includedStudentClusterCount}).`)
