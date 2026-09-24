@@ -45,6 +45,8 @@ export interface PreferenceSubmission extends VersionedEntity {
   submissionVersion: number
   status: SubmissionStatus
   source: 'nativ_app' | 'google_forms_import' | 'demo_seed'
+  importFingerprint?: string
+  externalSubmittedAt?: string
   submittedAt?: string
   catalogSnapshot: ClusterSnapshot[]
   preferences: ClusterPreference[]

@@ -29,6 +29,7 @@ export { changeStudentAssignment, rejectAssignmentRun, analyzeAppeal, approveAiE
 export { claimInitialAccessManager, getMyNativAccess, listAccessUsers, setUserAccess } from './accessCallablesV2'
 export { deliverNativMail } from './mailDelivery'
 export { getStudentRoster, getStudentChoiceDetails } from './studentRoster'
+export { previewGoogleFormsImport, commitGoogleFormsImport } from './googleFormsImport'
 export { downloadCycleDocument, extractCourseDescriptions, uploadCycleDocument } from './courseDescriptionImport'
 
 function mapError(error: unknown): never {

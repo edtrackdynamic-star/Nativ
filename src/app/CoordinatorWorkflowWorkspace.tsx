@@ -13,6 +13,7 @@ import { ResultExplorer } from './ResultExplorer'
 import { AppealDeadlineControl } from './AppealDeadlineControl'
 import { AppealDecisionControls } from './AppealDecisionControls'
 import { StudentRoster } from './StudentRoster'
+import { GoogleFormsImport } from './GoogleFormsImport'
 import type { Course, CycleCatalogSnapshot } from '../domain/catalog'
 import { useConfirmAction, useUnsavedChanges } from './interaction'
 import { coordinatorStageProgress, type CoordinatorStageId } from './coordinatorStages'
@@ -25,6 +26,7 @@ const actions: Partial<Record<CycleStatus, { to: CycleStatus; label: string; rea
 const auditLabels: Record<string, string> = {
   'cycle.created': 'מחזור נוצר', 'catalog.saved': 'הקורסים נשמרו', 'course.meeting_place.updated': 'מקום המפגש עודכן', 'cycle.transitioned': 'מצב המחזור השתנה',
   'preference.draft.saved': 'טיוטת בחירה נשמרה', 'preference.submitted': 'טופס בחירה הוגש', 'ai.batch.generated': 'הערכות נוצרו',
+  'preference.imported': 'בחירה נקלטה מטופס גוגל',
   'ai.evaluation.approved': 'הערכת העדפות אושרה', 'assignment.run.executed': 'השיבוץ הורץ', 'assignment.run.approved': 'השיבוץ אושר',
   'assignment.run.selected': 'נבחרה גרסת שיבוץ', 'assignment.rejected': 'גרסת שיבוץ נדחתה',
   'assignment.published': 'השיבוץ פורסם', 'appeal.submitted': 'ערעור הוגש', 'appeal.impact_analyzed': 'השפעת ערעור נבדקה',
@@ -127,6 +129,7 @@ export function CoordinatorWorkflowWorkspace({ cycleId, userId, organizationId, 
     <details className="coordinator-stage-list"><summary>כל שלבי התהליך</summary><div>{progress.stages.map(stage => <button key={stage.id} type="button" aria-current={tab === stage.id ? 'step' : undefined} onClick={() => void selectTab(stage.id)}>{stage.number}. {stage.label}</button>)}</div></details>
     <div className="coordinator-stage-heading"><span>שלב {progress.stages.find((stage) => stage.id === tab)?.number}</span><h3>{progress.stages.find((stage) => stage.id === tab)?.label}</h3>{tab !== progress.current && <p>{progress.stages.find((stage) => stage.id === tab)?.state === 'upcoming' ? 'שלב זה ייפתח לעבודה בהמשך התהליך. אפשר לעיין בו כבר עכשיו.' : 'אפשר לעיין בתוצאות ולבצע פעולות הזמינות במצב המחזור הנוכחי.'}</p>}</div>
     {showTransition && action && <div className="workspace-actions coordinator-transition"><button type="button" className="primary-action" disabled={readOnly || pending || (cycle.status === 'choice_closed' && !allAiApproved) || (cycle.status === 'appeals' && progress.openAppeals > 0)} onClick={() => void confirmPerform(() => transitionCycle(cycle, action.to, action.reason), `הפעולה “${action.label}” בוצעה ונשמרה.`, `לבצע ${action.label}? מצב המחזור ישתנה עבור המשתמשים.`)}>{action.label}</button>{cycle.status === 'choice_closed' && !allAiApproved && <span>כדי לעבור לשיבוץ יש ליצור ולאשר את כל הערכות ההעדפות.</span>}{cycle.status === 'appeals' && progress.openAppeals > 0 && <span>כדי לסגור את המחזור יש לטפל בכל הערעורים הממתינים.</span>}{cycle.status === 'published' && <button type="button" className="secondary-action" onClick={() => void selectTab('delivery')}>שליחת תוצאות</button>}</div>}
+    {tab === 'students' && cycle.status === 'choice_open' && <GoogleFormsImport cycleId={cycleId} catalog={catalogSnapshot} onImported={refresh} />}
     {tab === 'students' && <StudentRoster cycleId={cycleId} courseLabels={courseLabels} clusterLabels={clusterLabels} revision={cycleRevision} />}
     {tab === 'students' && cycle.status === 'choice_open' && <p className="coordinator-stage-note">סגרו את הבחירה רק לאחר שבדקתם מי הגיש. תלמידים שטרם הגישו לא יוכלו להשלים את הטופס לאחר הסגירה.</p>}
     <dl className="workspace-metrics"><div><dt>הערכות שאושרו</dt><dd>{workflow.aiEvaluations.filter((entry) => entry.approved).length}/{workflow.aiEvaluations.length}</dd></div><div><dt>ערעורים ממתינים</dt><dd>{progress.openAppeals}</dd></div></dl>

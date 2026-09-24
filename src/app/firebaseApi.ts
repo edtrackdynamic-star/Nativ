@@ -13,6 +13,25 @@ export interface AccessUserSummary { uid: string; email?: string; displayName?: 
 export interface NativSessionAccess { organizationId: string; organizationName: string; organizationLogoPath: string; roles: RoleId[]; capabilities: CapabilityId[]; accessMode: 'full' | 'read_only'; coreRole: string; displayName: string; email: string }
 export interface GoogleAccessOption { id: string; name: string; role: string }
 export interface LoginSchool { id: string; name: string }
+export interface GoogleFormsMapping { name: number; className: number; courses: Record<string, number>; rationales: Record<string, number>; students: Record<string, string> }
+export interface GoogleFormsPreview {
+  headers: string[]
+  mapping: GoogleFormsMapping
+  students: { id: string; name: string; classId: string; className: string }[]
+  rows: { row: number; name: string; className: string; studentId: string; errors: string[]; duplicateOf?: number }[]
+  total: number
+  ready: number
+  blocked: number
+  replaced: number
+}
+
+export async function previewGoogleFormsImport(cycleId: string, fileName: string, fileBase64: string, mapping?: GoogleFormsMapping): Promise<GoogleFormsPreview> {
+  return (await httpsCallable<Record<string, unknown>, GoogleFormsPreview>(functionsClient(), 'previewGoogleFormsImport')({ cycleId, fileName, fileBase64, ...(mapping ? { mapping } : {}) })).data
+}
+
+export async function commitGoogleFormsImport(cycleId: string, fileName: string, fileBase64: string, mapping: GoogleFormsMapping): Promise<{ created: number; unchanged: number; superseded: number }> {
+  return (await httpsCallable<Record<string, unknown>, { created: number; unchanged: number; superseded: number }>(functionsClient(), 'commitGoogleFormsImport')({ cycleId, fileName, fileBase64, mapping })).data
+}
 
 export async function listLoginSchools(): Promise<LoginSchool[]> {
   return (await httpsCallable<Record<string, never>, { schools: LoginSchool[] }>(functionsClient(), 'listLoginSchools')({})).data.schools
